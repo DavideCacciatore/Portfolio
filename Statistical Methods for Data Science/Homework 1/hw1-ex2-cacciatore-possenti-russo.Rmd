@@ -1,0 +1,231 @@
+---
+title: "Homework 1"
+author: "Davide Cacciatore, Francesca Possenti, Letizia Russo"
+date: "4/12/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Exercise 2
+
+#### *2.1. For a fixed h, what kind of constrains we need to impose over the parameter vector $(\pi_1,...,\pi_N)$ for $\hat{f}(x; \theta)$ to be a legit density?*
+A function $f(x)$ is a legit density function if it satisfies the following two properties:
+
+- **Non-negativity**: $f(x) \ge 0$ for any $x \in R$;
+
+- **Its integral over $R$ equals $1$**: $\int_{-\infty}^{\infty} f(x)dx = 1$
+
+We defined a stepwise function (an histogram) with density $\hat{f}(x;\theta)$, which approximates the true Beta model density since $F_Y$ is an approximation of $F_{X}$:
+
+$$
+\hat{f}(x;\theta) = \sum_{j=1}^{N}\frac{\pi_j}{h} \mathbb{1}(x \in B_{j})
+$$
+
+where $\theta = (h, \pi_1, . . . , \pi_N )$ and $\mathbb{1}(x \in B_{j})dx$ is the indicator function of the $j^{th}$ bin.
+
+In order to obtain a legit density function, we must impose that the integral of the function is equal to one:
+
+$$
+\int_{R}\hat{f}(x;\theta)dx=1 \Leftrightarrow \sum_{j=1}^{N}\frac{\pi_j}{h}\int_{R} \mathbb{1} (x \in B_{j})dx =1
+$$
+
+Since we know that $\int_{B}dx=h$, we obtain:
+$$
+\sum_{j=1}^{N}\frac{\pi_j}{h}h=\sum_{j=1}^{N}\pi_j=1
+$$
+This allows us to say that $\pi_j$ is a probability and $\frac{\pi_j}{h}$ is a density. In fact, since we're working on an histogram, we know that each bar's height represents a frequency, so we get the density dividing them by the correspondent $h$, that is the size of each bin. 
+
+#### *2.2 Implement $\hat{f}(x;\theta)$ and its corresponding quantile function, say $F^{-1}(x;\theta)$, in R.*
+
+We randomly generate 10000 observations assuming that $Y \sim Beta(\alpha,\beta)$
+```{r}
+# Set alpha and beta 0.45
+Y = rbeta(10000, 0.45, 0.45)
+h = 0.01 # length of the bins 
+N = round(1/h) # number of bins
+
+# Plot the histogram
+hist(Y, breaks = N, main = "Histogram", col="orchid1", 
+     ylab = "Frequency", xlab = "Y", freq = F)
+```
+
+```{r}
+# Add to the plot the density of the true Beta.
+X <- function(x) dbeta(x, 0.45, 0.45)
+histogram = hist(Y, breaks=N, main="Histogram", freq = F, 
+                 col="orchid1", ylab = "Frequency", xlab = "Y")
+curve(X, 0, 1, add = T, col='blue', lwd = 3)
+```
+
+We know that the sum of the area of all the bins need to be equal to one. $$
+\sum_{j=1}^{N}\pi_j = 1
+$$
+
+
+```{r}
+# histogram$density is the vector with all the heigts of the rectangles
+# h is the length of each bins
+pi <- histogram$density*h
+sum(pi)
+```
+Now we can compute the $\hat{f}(x;\theta)$ function.
+
+
+```{r}
+bins <- histogram$breaks # Set the bins
+d <- histogram$density # Set the height of the bins
+
+# Compute the function
+f_hat <- function(x) {
+  f_r <- 0
+  for (j in 1:N){
+    f_r = f_r + d[j]*(x >= bins[j])*(x < bins[j+1])
+  }
+  return (f_r)
+}
+
+# Let's see the plot of this function
+curve(f_hat(x), from=0, to=1, lwd=2, col='orchid1')
+
+# Let's see if this is a proper density
+# We must expect an area under the curve, from 0 to 1, equal to 1
+# In order to evaluate this integral, we had to set an higher number of subdivisions
+integrate(f_hat, lower=0, upper=1, subdivisions=1000)
+
+```
+
+We can say that this is a proper density, now we want to evaluate its quantile function $\hat{F}^{-1}(x;\theta)$.
+
+```{r}
+# We can get the quantile function via the density itself
+
+# Consider the value of the integral, keeping in mind that when t>=1
+# That value should be 1
+my_int <- function(t) ifelse(t >= 1, 1, 
+                             integrate(f_hat, -Inf, t, 
+                                       subdivisions = 1000)$value) 
+my_eq <- function(y, p) my_int(y) - p
+F_q <- function(p) uniroot(my_eq, c(0,1), p = p)$root
+
+# Now that we have our quantile function we can plot it
+# But first we need to vectorize it
+F_q_vec <- Vectorize(F_q, "p")
+curve(F_q_vec(x), from = 0, to = 1,
+      xlab = "p", ylab = expression(F^(-1)),
+      lwd = 2, col = "orchid2", main='Quantile function')
+abline(h=0, lty=2)
+abline(h=1, lty=2)
+```
+
+
+#### *2.3 Pick a specific $(\alpha, \beta)$ pair and, for any $h > 0$, fix $\pi_j = \int_{B_j}f(x)dx$.* 
+#### *Notice that now $\hat{f}(\cdot ; \theta)$ depends on a single tuning parameter, the binwidth $h$.* 
+#### *For this reason, let's simplify the notation and use $\hat{f_h}(\cdot)$ and $\hat{F_{h}}^{-1}(\cdot)$ to denote the approximant density and its quantile function respectively.* 
+#### *Let $\epsilon > 0$ be an approximation level you are targeting in terms of $p = 1$ Wasserstein distance, meaning that you're looking for the largest binwidth $h$ (i.e. the coarsest approximation) such that:*
+
+$$
+W_{L_1,1}(f,\hat{f_h})=\Bigg(\int_{0}^{1}|F^{-1}(z)-\hat{F_h}^{-1}(z)|dz\Bigg) \le \epsilon
+$$
+
+#### *Use any (reasonable) technique you like, to study how $h$ varies with $\epsilon$ (... and properly comment the results).*
+
+First of all, we implemented from scratch a p=1 **Wasserstein distance** that, for given $h$ and $\epsilon$, evaluates the integral over the absolute difference of the two quantile functions and, if the output value is less or equal than the approximation level, it returns the given $h$.
+
+```{r, fig.show='hide'}
+# Generate the quantile function F^-1 of Y~Beta(0.45, 0.45)
+Q_beta <- function(p) qbeta(p, 0.45, 0.45)
+
+# Define a function that evaluate the p=1 Wasserstein distance
+my_wasserstein <- function(h, e) {
+  
+  # Input:
+  #       h <- binwidth
+  #       e <- approximation level
+  
+  N = round(1/h)
+  bins <- seq(0, 1, h) # Set the bins
+  d <- hist(Y, breaks=N)$density # Set the height of the bins
+  
+  # Compute the function to evaluate f_hat
+  f_hat <- function(x) {
+    f_r <- 0
+    for (j in 1:N){
+      f_r = f_r + d[j]*(x >= bins[j])*(x < bins[j+1])
+    }
+    return (f_r)
+  }
+  
+  # Get its quantile function
+  my_int <- function(t) ifelse(t >= 1, 1, 
+                               integrate(f_hat, -Inf, t, 
+                                         subdivisions = 100/h)$value) 
+  my_eq <- function(y, p) my_int(y) - p
+  F_q <- function(p) uniroot(my_eq, c(0,1), p = p)$root
+  F_q_vec <- Vectorize(F_q, "p")
+  
+  # Evaluate as a function the absolute distance between the 
+  # empirical quantile of beta and the approximated one
+  dist <- function(x) abs(Q_beta(x) - F_q_vec(x))
+  
+  # Evaluate the integral from 0 to 1 of the dist function <- Wasserstein distance
+  wass <- integrate(dist, lower=0, upper=1, subdivisions=100/h)$value
+  
+  # If the value of the integral is less or equal than the approximation level
+  # return the used binwidth,
+  # else return 0
+  if (wass <= e) { 
+    return(h)
+  }else{
+    return(0)
+  }
+}
+```
+
+We want to test this function for different approximations levels $\epsilon$ and with different binwidths $h$, in order to find, for each $\epsilon$, the largest $h$ between the given ones that verifies the inequality.
+
+```{r, fig.show='hide'}
+
+# Set 6 possible binwidths
+binwidths <- c(0.5, 0.25, 0.2, 0.1, 0.05, 0.01)
+
+# Set 4 approximations level we want to test
+eps <- c(0.005, 0.01, 0.05, 0.1)
+
+# Initialize a NA matrix where to store our results
+results = matrix(data = NA, nrow = 4, ncol = 6)
+
+# Check for each epsilon
+for (e in 1:length(eps)) {
+  # Check for each binwidth
+  for (h in 1:length(binwidths)) {
+    # Run the Wasserstein distance
+    results[e,h] <- my_wasserstein(binwidths[h], eps[e])
+  }
+}
+
+# Initialize the vector with all the largest h that satisfy the inequality
+largest_h <- replicate(0, 4)
+
+# For each epsilon check what is the maximum h between the ones we choose to analyze
+for (i in 1:length(eps)) {
+  largest_h[i] <- max(results[i,])
+}
+
+# Organize the results in a dataframe
+table <- data.frame(eps = eps, largest_h = unlist(largest_h))
+table
+```
+
+We observe that, as expected, as the $\epsilon$ increments, the largest possible $h$ it increments too. Obviously, if you consider a lower $h$, it means that the histogram will have an high number of bins, so it will approximate quite good the target function and the Wasserstein distance will be lower. Infact, we obtain that the highest $h$ works fine with the highest $\epsilon$ we choose, but for the lowest one we need the lowest $h$, so an histogram with an high number of bins to approximate the function.
+
+```{r}
+# Plot the results to see how the largest h can variate with different epsilon
+plot(table, type='b', pch=19, col='red',
+     xlab = 'Approximation levels e', ylab = 'Largest possible h',
+     main = 'Relation between binwidth h and approximation level e')
+```
+
+The plot shows us how the largest possible binwidth $h$ variates with $\epsilon$. We can say that the two are positively related.

@@ -1,0 +1,397 @@
+---
+title: "Homework 1"
+author: "Davide Cacciatore, Francesca Possenti, Letizia Russo"
+date: "25/11/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Exercise 1
+
+#### *1.1 Show the validity of the update step (i.e., the one you need to code): increasing by $1$ the $j^{th}$ coordinate of $x^{(k−1)}$ corresponds to add the $j^{th}$ column of $L$ to $y^{(k−1)}$.*
+
+First, we define all the elements:
+
+1. $x$ is a $d$-dimension vector. In his initialized form it contains only zero values. Infact, we can define $x^{(0)} = [0_{(0)},...,0_{(d)}]$.
+
+2. $y$ is a $p$-dimension vector. In his initialized form it contains only zero values. Infact, we can define $y^{(0)} = [0_{(1)}, ...,0_{(p)}]$.
+
+3. $L$ is a $p•d$ matrix. It contains elements drawn indipendently from a normal distribution $N(0,\frac{1}{p})$.
+
+We know that $p<<n<<d$, we can show the situation at the initial step $0$ with some very low fixed value of $d$ and $p$, just to see an example of how it works.
+
+```{r}
+d = 50               #set d
+p = 5                #set p
+x <- replicate(d, 0) #inital x
+
+# Random values extracted from N(0,1/p) organized into the L matrix
+L <- matrix(rnorm(p*d, mean = 0, sd = sqrt(1/p)), nrow = p, ncol = d)
+
+# Compute the dot product
+y <- L%*%x
+
+# Check if our initial assumption is right
+y
+```
+Obviously, we get a vector of $0$ as result, because when the algorithm starts the frequency vector $x$ contains only $0$.
+
+At step $k=1$, the frequency vector $x$ is composed by all zeros except the $j^{th}$ element that now is $1$. So, because we are computing a dot product to get $y^{(1)}$, we're just adding the $j^{th}$ column of $L$ to $y^{(0)}$. Every $i^{th}$ element of $y^{(1)}$, will be equal to:
+
+$$
+y^{(1)}_{i} = \sum^{d}_{j=1} L_{ij}•x_{j}^{(1)}
+$$
+But, if $x_{j}^{(1)}$ is a vector with all $0$ and only the $j^{th}$ value as $1$, we get that:
+$$
+y^{(1)}_{i} = L_{ij}
+$$
+Let's see it with a small example in R.
+
+```{r}
+# set j=12
+x1 <- c(replicate(11, 0), 1, replicate(d-12, 0)) #x^(1)
+
+# Compute the new dot product
+y1 <- L%*%x1
+
+# Check if we are right
+y1
+L[,12]
+y1 == L[,12]
+
+```
+
+As we can see, we have shown that, fixed $j=12$, we're just adding the $12^{th}$ column of $L$ to $y^{(0)}$. So, we have that: $y^{(1)} = L_{:,12}$. 
+
+Consequentially, at each step $k$, a new $j^{th}$ element of the frequency vector $x$ will increase by $1$. So, we update the vector $y$, adding the $j^{th}$ column of $L$ to the previous version of $y$:
+$$
+y^{(k)} = y^{(k-1)}+L_{:,j}
+$$
+
+#### *1.2 Use R to generate the matrix $L$ many times (say M = 1000) and setup a suitable simulation study to double-check the JL-lemma. You must play around with different values of $d$, $n$, $\epsilon$ and $p$ (just a few, well chosen values, will be enough). The raw stream $D_n = (i_1, . . . , i_n)$ can be fixed or randomized too, but notice that the probability appearing in Equation (1) simply accounts for the uncertainty implied by the randomness of $L$.*
+
+The *Johnson-Lindenstrauss lemma* says that, for every tolerance $\epsilon > 0$ we set:
+$$
+\Pr \Big( (1-\epsilon) \cdot ||x|| \leq ||y|| \leq (1+\epsilon) \cdot ||x|| \Big) \geq 1-e^{-\epsilon^2 \cdot p}
+$$
+We define the function *random_projection* in order to double-check the JL-lemma for some input values of $d$, $n$, $\epsilon$ and $p$. This function will output the lemma's probability and successively and check its correctness.
+
+```{r}
+M <- 1000 #number of simulations 
+
+random_projection <- function(d, n, e, p){
+  
+  jl = replicate(M, 0) 
+  # Initialize the counter for the number of times 
+  # the condition in the JL lemma is verified
+  
+  for (i in 1:M) {
+    
+    ## This is the algorithm used to compute 'y' and its norm ##
+    
+    y <- replicate(p, 0) # Initialize the vector y
+    
+    x <- replicate(d, 0) # Initialize the frequency vector x
+    
+    # The matrix L contains random number from a N(0,1/p)
+    L = matrix(rnorm(p*d, mean = 0, sd = sqrt(1/p)), nrow = p, ncol = d)
+    
+    for(k in 1:n) {
+      # At each step k, we have an index j picked randomly from a Unif(1,d)
+      j = runif(1, min = 1, max = d)
+      
+      y = y + L[,j] # For every step k we add the j-th column of L to y
+      
+      ## Now we compute x **only** in order to check the JL lemma ##
+      
+      x[j] = x[j] + 1 # For every k step the j-th coordinate of x increase by 1
+      
+    }
+    
+    y_norm = norm(y, type = '2') # Get the norm of y
+    
+    x_norm <- norm(x, type = '2') # Get the norm of x
+    
+    # Check the JL Lemma
+    if ((y_norm >= (1-e)*x_norm) & (y_norm <= (1+e)*x_norm)) {
+      jl[i] = 1
+    }
+  }
+  
+  # Check if the result is correct
+  print(c('JL is verified:', sum(jl)/M >= 1-exp(-(e^2)*p)))
+  
+  return(sum(jl)/M)
+}
+```
+
+We notice that we don't need to store the entire stream $D_n$, because at each step a new index $j$ is sampled from a Unif(1,d) and, to compute the norm of $y$, we can consider only the $j^{th}$ column of $L$. 
+
+The frequency vector $x$ is required to build the probability of the JL-lemma.
+
+```{r}
+# Run our algorithm to check JL lemma with some test values (valid vor the drag-race).
+# d = 5000
+# n = 1000
+# eps = 0.1
+# p = log(n)/eps^2
+beg <- Sys.time()
+
+M <- 10000
+random_projection(5000, 1000, 0.1, round(log(1000)/0.1^2))
+
+fin <- Sys.time() - beg
+print(fin)
+```
+
+The **Johnson-Lindenstrauss lemma** is verified with 1000 iterations and these values for the parameters.
+
+Now we want to try our function with different values of $d$, $n$, $\epsilon$ and $p$. 
+We decided to set 6 simulations:
+```{r}
+n_sim = 6
+
+# We mantain the same values for d, becuse the lemma ignores the alphabet size d
+d = c(10000, 10000, 10000, 10000, 10000, 10000)
+n = c(1000, 1000, 100, 100, 100, 100)
+e = c(0.15, 0.15, 0.25, 0.25, 0.5, 0.5)
+p = c(round(1/e[1]^2), round(log(n[2])/e[2]^2), 
+      round(1/e[3]^2), round(log(n[4])/e[4]^2),
+      round(1/e[5]^2), round(log(n[6])/e[6]^2))
+```
+
+In particular, we want to study how the probability computed by the lemma variates, changing the values of $n$ and $\epsilon$ and comparing the result both with $p=\frac{1}{\epsilon^2}$ and $p=\frac{\log(n)}{\epsilon^2}$.
+
+```{r}
+# Initialize a vector that contains the probabilities of each simulation
+p_jl <- replicate(0, n_sim)
+
+M <- 1000 # Set 1000 simulations again
+for(i in 1:n_sim){
+  p_jl[i] <- random_projection(d[i], n[i], e[i], p[i])
+}
+```
+
+The JL-lemma is verified for all these values.
+
+We can organize these results in a table.
+```{r}
+# Calculate the thresholds for each simulations
+pr_threshold = replicate(0, n_sim)
+for (i in 1:n_sim){
+  pr_threshold[i] = 1-exp(-(e[i]^2)*p[i])
+}
+
+# Dataframe with all the values and outputs of the simulations
+table <- data.frame(d = d, n = n, e = e, p = p, Pr = unlist(p_jl), 
+                    Th = unlist(pr_threshold))
+table
+```
+
+We observe that when we set $p=\frac{\log(n)}{\epsilon^2}$ the probability to get $||y||$ as a remarkable approximation of $||x||$ is very high and close to $1$ because, in this way, we have accurate estimates at each step of the stream. Instead, when we set $p=\frac{1}{\epsilon^2}$, the probability is lower.
+This is due to the fact that we use larger $p$.
+If we increment our $\epsilon$, with fixed $n$, the results is that we get a lower $p$ but the results in terms of probabilities remains quite similar.
+Obviously, also the threshold changes, depending on what $p$ and $\epsilon$ we set.
+
+In order to analyze better this differences between the two setted $p$, we can produce different plots.
+We can compare the precision of the $||y||$ approximation in the two cases with two scatterplots.
+```{r}
+# Use a function similar to the previous but with the norms of the vectors as output
+my_norms <- function(d, n, e, p){
+  
+  y_norm <- replicate(M, 0)
+  x_norm <- replicate(M, 0)
+  
+  for (i in 1:M) {
+    
+    ## This is the algorithm used to compute 'y' and its norm ##
+    
+    y <- replicate(p, 0) # Initialize the vector y
+    
+    x <- replicate(d, 0) # Initialize the frequency vector x
+    
+    # The matrix L contains random number from a N(0,1/p)
+    L = matrix(rnorm(p*d, mean = 0, sd = sqrt(1/p)), nrow = p, ncol = d)
+    
+    for(k in 1:n) {
+      # At each step k, we have an index j picked randomly from a Unif(1,d)
+      j = runif(1, min = 1, max = d)
+      
+      y = y + L[,j] # For every step k we add the j-th column of L to y
+      
+      ## Now we compute x **only** in order to check the JL lemma ##
+      
+      x[j] = x[j] + 1 # For every k step the j-th coordinate of x increase by 1
+      
+    }
+    
+    y_norm[i] = norm(y, type = '2') # Get the norm of y
+    
+    x_norm[i] <- norm(x, type = '2') # Get the norm of x
+    
+  }
+  
+  my_norms = list(y_norm = y_norm, x_norm = x_norm)
+  
+  return(my_norms)
+}
+```
+```{r}
+par(mfrow=c(1,2)) # Set 2 plots in one figure
+
+# Calculate the norms when p=log(n)/e^2
+# (Input values from the previous table)
+norms1 <- my_norms(10000, 1000, 0.15, 307)
+
+# Store in a dataframe the y norm and the two interval bounds
+n1 <- data.frame(low.bound = (1-0.15)*norms1$x_norm,
+                y = norms1$y_norm,
+                upp.bound = (1+0.15)*norms1$x_norm)
+
+# Plot
+plot(n1$y, pch=16, col='khaki3', ylim = c(24,40), ylab = 'Norms',
+     main = 'Representation of the JL Lemma \nwith p=log(n)/e^2')
+points(n1$low.bound, pch=16, col='blue')
+points(n1$upp.bound, pch=16, col='blue')
+legend('bottomleft', legend=c('Bounds','Y norm'), 
+       col=c('blue','khaki3'), pch=16)
+
+# Calculate the norms when p=1/e^2
+# (Input values from the previous table)
+norms2 <- my_norms(10000, 1000, 0.15, 44)
+
+# Store in a dataframe the y norm and the two interval bounds
+n2 <- data.frame(low.bound = (1-0.15)*norms2$x_norm,
+                y = norms2$y_norm,
+                upp.bound = (1+0.15)*norms2$x_norm)
+
+# Plot
+plot(n2$y, pch=16, col='khaki3', ylim = c(24,40), ylab = 'Norms',
+     main = 'Representation of the JL Lemma \nwith p=1/e^2')
+points(n2$low.bound, pch=16, col='blue')
+points(n2$upp.bound, pch=16, col='blue')
+legend('bottomleft', legend=c('Bounds','Y norm'), 
+       col=c('blue','khaki3'), pch=16)
+
+par(mfrow=c(1,1)) # Back to the default plotting sets
+
+```
+
+On the left, we see that the value of $||y||$ is always in the interval $(1 \pm \epsilon) \cdot ||x||$ and it is well concentrated in the middle. On the right, with a lower $p$, the value of $||y||$ has an higher variability. Infact, there are same norms that are outside the interval. This confirm the results shown in the previous table that with lower $p$ the probability to get an accurate estimate of $||x||$ is lower too. 
+
+Now we want to compare the different levels of probabilities and thresholds with the two different kinds of $p$. 
+```{r}
+par(mfrow=c(1,2)) # Set 2 plots in one figure
+
+# Plot the probabilities for p=log(n)/eps^2
+plot(c(table$Pr[2], table$Pr[4], table$Pr[6]), 
+     type = "b", frame = FALSE, pch = 19, 
+     ylim=c(min(table$Th)-0.05,1), 
+     col = "red", lty = 1, lwd = 1, ylab = 'Pr', 
+     xlab = 'Simulation', main = 'Probabilities for p=log(n)/eps^2')
+
+# Add line for the different thresolds
+lines(c(table$Th[2], table$Th[4], table$Th[6]),  
+      pch = 18, col = "blue", type = "b", 
+      lty = 2, lwd = 1)
+
+# Add a legend
+legend('bottomleft', legend = c('Probs','Thresholds'), 
+       col =c('red','blue'), pch = c(19, 18))
+
+# Plot the probabilities for p=1/eps^2
+plot(c(table$Pr[1], table$Pr[3], table$Pr[5]), 
+     type = "b", frame = FALSE, pch = 19, 
+     ylim=c(min(table$Th)-0.05,1), 
+     col = "red", lty = 1, lwd = 1, ylab = 'Pr', 
+     xlab = 'Simulation', main = 'Probabilities for p=1/eps^2')
+
+# Add line for the different thresolds
+lines(c(table$Th[1], table$Th[3], table$Th[5]),  
+      pch = 18, col = "blue", type = "b", 
+      lty = 2, lwd = 1)
+
+# Add a legend
+legend('topright', legend = c('Probs','Thresholds'), 
+       col =c('red','blue'), pch = c(19, 18))
+
+par(mfrow=c(1,2)) # Back to the default plotting sets
+```
+
+We can see how the probabilities for $p=\frac{\log(n)}{\epsilon^2}$ are pretty high and close to $1$ as the thresholds. As we use lower values of $\epsilon$ the results seems to slightly reduce, but the $\Pr$ is always higher than the thresholds and this is what matters to us.
+With $p=\frac{\log(n)}{\epsilon^2}$ we have already seen that the results are less accurate, but we can notice that the thresholds are very low in this case and this keeps the JL-lemma verified.
+
+
+#### *1.3 The main and only object being updated by the algorithm is the vector y. This vector consumes $p \sim \frac{\log(n)}{\epsilon^2}$ words of space, so. . . have we achieved our goal? Explain.*
+
+We can say that we have achieved the goal of reducing $x$ dimensionality from $d$ to $p$ using an its random projection $y$ that allows us to evaluate the length of $x$ with a nice approximation.
+
+Following the given steps of the algorithm, we had to store the $L$ matrix and this requires $\mathcal{O}(\log(n)\cdot d)$ units of space. It is very expensive and it doesn't seem to be a real profit from this operation.
+
+This is our **possible solution** to solve this problem.
+Given the random nature of $L$, a possible solution could be consider at each step of the algorithm a different random p-dimensional vector, whose entries are drawn independently from the same normal distribution as before.
+The problem could be that if, at one step $k$, we have had to increase by $1$ the same $x_j$ of one or more previous cases, we would have considered the same $j^{th}$ column of $L$ multiple times, but with this algorithm we have different "columns" of $L$ every time. 
+Actually, this is not a big problem, because we are talking of approximations and, given the fact that $d$ must be a large number (even possibly infinite), the chance to get two or more times the same index $j$ are very low, we can say they are almost $0$. (Because $j$ can be any number from $1$ to $d$.)
+We can try this modified algorithm and try if it works and respect the JL-lemma. We use as inputs some of the ones used in the previous simulations in order to compare the outputs.
+
+```{r}
+M <- 1000 #number of simulations 
+
+new_random_projection <- function(d, n, e, p){
+  
+  jl = replicate(M, 0) 
+  # Initialize the counter for the number of times 
+  # the condition in the JL lemma is verified
+  
+  for (i in 1:M) {
+    
+    ## This is the algorithm used to compute 'y' and its norm ##
+    
+    y <- replicate(p, 0) # Initialize the vector y
+    
+    x <- replicate(d, 0) # Initialize the frequency vector x
+    
+    for(k in 1:n) {
+      # At each step k, we have an index j picked randomly from a Unif(1,d)
+      j = runif(1, min = 1, max = d)
+      
+      # For every step k we add a random normal p-dimensional vector to y
+      y = y + rnorm(p, mean = 0, sd = sqrt(1/p)) 
+      
+      ## Now we compute x **only** in order to check the JL lemma ##
+      
+      x[j] = x[j] + 1 # For every k step the j-th coordinate of x increase by 1
+      
+    }
+    
+    y_norm = norm(y, type = '2') # Get the norm of y
+    
+    x_norm <- norm(x, type = '2') # Get the norm of x
+    
+    # Check the JL Lemma
+    if ((y_norm >= (1-e)*x_norm) & (y_norm <= (1+e)*x_norm)) {
+      jl[i] = 1
+    }
+  }
+  
+  # Check if the result is correct
+  print(c('JL is verified:', sum(jl)/M >= 1-exp(-(e^2)*p)))
+  
+  return(sum(jl)/M)
+}
+```
+```{r}
+new_random_projection(10000, 100, 0.25, 74)
+
+```
+```{r}
+new_random_projection(10000, 100, 0.25, 16)
+```
+
+We see that this algorithm actually works, outputs nice results and seems to verify the Johnson-Lindenstrauss lemma. The probabilities are also really close to the ones obtained with the other algorithm and this could confirm the assumption we made at the beginning.
+This way, we can obtain an algorithm that use $\mathcal{O}(\log(n))$ words of space to process the vector $y$. 
+
+*We had discussions for some of our solutions with Michele Luca Puzzo.*

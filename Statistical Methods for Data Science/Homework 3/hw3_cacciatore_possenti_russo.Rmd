@@ -1,0 +1,1078 @@
+---
+title: "SDS / Homework 3"
+author: "Cacciatore, Possenti, Russo"
+output: html_document
+---
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+#install.packages("devtools")
+#devtools::install_github("chunlinli/clrdag/pkg/clrdag")
+# Load the package
+library(clrdag)
+```
+
+### 2) By using the *MLEdag()* function to get constrained and unconstrained MLEs, adapt and implement in R at least one of the *universal tests* to the problem of testing for *graph linkages* and *directed pathway*.
+
+#### **Log-likelihood & $\hat{\sigma}^2$**
+
+First of all, we need to implement two useful functions: the log-likelihood function and the function to evaluate the maximum-likelihood estimate of sigma.
+
+This is the log-likelihood function:
+
+$$
+\ell_n(\mathbb{A}, \sigma^2) = - \sum_{j=1}^{p} \Bigg( \frac{1}{2\sigma^2} \sum_{i=1}^{n} \Big( \mathbb{X}[i,j] - \sum_{k:k \ne j} \mathbb{A}[j,k] \cdot \mathbb{X}[i,k] \Big)^2 + \frac{n}{2}\ln{\sigma^2} \Bigg)
+$$
+
+```{r}
+log_likelihood <- function(p, n, A, sigma, X) {
+  
+  # Input:
+  #   p <- number of features of the dataset (number of nodes in the graph)
+  #   n <- number of observations of the dataset
+  #   A <- adjacency matrix (p*p)
+  #   sigma <- sd of the Gaussian
+  #   X <- data matrix (n*p)
+  
+  # Output: log-likelihood value
+  
+  log_l = rep(NA, p)
+  # Loop for p
+  for(j in 1:p){
+    s_2 = 0
+    # Loop for n
+    for(i in 1:n){
+      s_1 = 0
+      # Second loop for p
+      for(k in 1:p){
+        if(k != j){
+          s_1 = s_1 + A[j,k] * X[i,k]
+        }
+      }
+      s_2 = s_2 + (X[i,j] - s_1)^2
+    }
+    # Log-likelihood
+    log_l[j] = ((1/(2*(sigma^2))) * s_2 + (n/2) * log(sigma^2))
+  }
+  # Return the final output
+  return(-sum(log_l))
+}
+```
+
+We can evaluate the estimated sigma with the following formula:
+
+$$
+\hat{\sigma}^{2} = (np)^{-1} \sum_{j=1}^{p} \sum_{i=1}^{n} \Big(\mathbb{X}[i,j] - \sum_{k:k \ne j} \mathbb{X}[i,k] \cdot \mathbb{A}[j,k] \Big)^{2}
+$$
+
+```{r}
+sigma.hat <- function(p, n, A, X) {
+  
+  # Input:
+  #   p <- number of features of the dataset (number of nodes in the graph)
+  #   n <- number of observations of the dataset
+  #   A <- adjacency matrix (p*p)
+  #   X <- data matrix (n*p) 
+  
+  # Output: sigma.hat (standard deviation)
+  
+  # Initialize the sum
+  s2 <- 0
+  
+  # Main loops
+  for(j in 1:p){
+    for(i in 1:n){
+      s1 <- 0
+      for(k in 1:p){
+        if(k != j){
+          s1 <- s1 + X[i,k] * A[j,k]
+        }
+      }
+      s2 <- s2 + (X[i,j] - s1)^2
+    }
+  }
+  
+  # Compute the estimate standard deviation
+  sigma.hat <- sqrt(s2/(n*p))
+  return(sigma.hat)
+}
+```
+
+#### **Universal Tests**
+
+We will adopt the two universal tests: the **Split Likelihood Ratio** and the **Crossfit Likelihood Ratio**.
+
+The first one is defined by the following formula:
+
+$$
+U_{\frac{n}{2}} = \frac{\mathcal{L} \Big(\hat{\theta}^{Te} | \mathbb{X}_{\frac{n}{2}}^{Tr} \Big)} {\mathcal{L} \Big(\hat{\theta}^{Tr}_{0} | \mathbb{X}_{\frac{n}{2}}^{Tr} \Big)}
+$$
+
+The second one is defined by:
+
+$$
+W_{\frac{n}{2}} = \frac{U_{\frac{n}{2}} + U_{\frac{n}{2}}^{swap}}{2}
+$$
+
+Where $U_{\frac{n}{2}}^{swap}$ is the same as $U_{\frac{n}{2}}$ after swapping $\mathbb{X}_{\frac{n}{2}}^{Tr}$ with $\mathbb{X}_{\frac{n}{2}}^{Te}$.
+
+If we use the log-likelihood functions instead of the likelihoods, we will reject $H_0$ if $\ell_{\frac{n}{2}}(\hat{\theta}^{Te} | \mathbb{X}_{\frac{n}{2}}^{Tr}) - \ell_{\frac{n}{2}}(\hat{\theta}^{Tr}_{0} | \mathbb{X}_{\frac{n}{2}}^{Tr}) > -\ln{(\alpha)}$.
+
+#### **Universal Tests for Graph Linkage**
+
+The *graph linkage* test we are gonna use is expressed by the following formula:
+
+$$
+U_n = \frac{\ell(\hat{\mathbb{A}}, \hat{\sigma}^{2}|D_n)}{\ell(\hat{\mathbb{A}_0}, \hat{\sigma}^{2}_0|D_n)}
+$$
+
+So, we are interested in testing:
+
+$$
+H_0 : \mathbb{A}[j, k] = 0 \qquad \forall \: (j,k) \in F
+$$
+
+$$
+H_1:not \: H_0
+$$
+
+##### **Split Likelihood Ratio for Graph Linkage**
+
+```{r}
+slr.gl <- function(n, p, X, D){
+  # Input:
+  #   n <- number of observations
+  #   p <- number of features
+  #   X <- data matrix
+  #   D <- matrix with the constraints
+  
+  # Output: value of the universal test
+  
+  # Split the original dataset into Train and Test
+  # Get the train indexes by random sampling
+  train_idx <- sample(1:n, size = n/2)
+  # Create the two new datasets
+  X.tr <- X[train_idx,]
+  X.te <- X[-train_idx,]
+  n.tr <- length(X.tr[,1]) # Length of the train set
+  n.te <- length(X.te[,1]) # Length of the test set
+  
+  # Find the estimated adjacency matrix from the test dataset
+  A.te <- MLEdag(X = X.te, D = D, tau=0.3, mu=1, rho=1.2, trace_obj = F)$A.H1
+  # Find the estimated sigma from the test dataset
+  sigma.te <- sigma.hat(p, n.te, A.te, X.te)
+  # Compute the log-L of the numerator of the split likelihood ratio 
+  l1 <- log_likelihood(p, n.tr, A.te, sigma.te, X.tr)
+  
+  # Find the constrained estimate of the adjacency matrix from the train dataset
+  A0.tr <- MLEdag(X = X.tr, D = D, tau=0.3, mu=1, rho=1.2, trace_obj = F)$A.H0
+  # Find the constrained estimate of sigma from the train dataset
+  sigma0.tr <- sigma.hat(p, n.tr, A0.tr, X.tr)
+  # Compute the log-L of the denominator of the split likelihood ratio
+  l2 <- log_likelihood(p, n.tr, A0.tr, sigma0.tr, X.tr)
+  
+  # Evaluate the universal test statistic
+  U_n.gl <- l1 - l2
+  
+  return(U_n.gl)
+}
+```
+
+##### **Crossfit Likelihood Ratio for Graph Linkage**
+
+In order to implement the swapped Split Likelihood Ratio we only have to swap the train set with the test one, using the same procedure as before.
+
+```{r}
+slr.gl_swap <- function(n, p, X, D){
+  # Input:
+  #   n <- number of observations
+  #   p <- number of features
+  #   X <- data matrix
+  #   D <- matrix with the constraints
+  
+  # Output: value of the universal test
+  
+  # Split the original dataset into Train and Test
+  # Get the train indexes by random sampling
+  train_idx <- sample(1:n, size = n/2)
+  # Create the two new datasets
+  X.tr <- X[train_idx,]
+  X.te <- X[-train_idx,]
+  n.tr <- length(X.tr[,1]) # Length of the train set
+  n.te <- length(X.te[,1]) # Length of the test set
+  
+  # Find the estimated adjacency matrix from the train dataset
+  A.tr <- MLEdag(X = X.tr, D = D, tau=0.3, mu=1, rho=1.2, trace_obj = F)$A.H1
+  # Find the estimated sigma from the train dataset
+  sigma.tr <- sigma.hat(p, n.tr, A.tr, X.tr)
+  # Compute the log-L of the numerator of the swap split likelihood ratio 
+  l1 <- log_likelihood(p, n.te, A.tr, sigma.tr, X.te)
+  
+  # Find the constrained estimate of the adjacency matrix from the test dataset
+  A0.te <- MLEdag(X = X.te, D = D, tau=0.3, mu=1, rho=1.2, trace_obj = F)$A.H0
+  # Find the constrained estimate of sigma from the test dataset
+  sigma0.te <- sigma.hat(p, n.te, A0.te, X.te)
+  # Compute the log-L of the denominator of the swap split likelihood ratio
+  l2 <- log_likelihood(p, n.te, A0.te, sigma0.te, X.te)
+  
+  # Evaluate the universal test statistic
+  U_n.gl <- l1 - l2
+  
+  return(U_n.gl)
+}
+```
+
+Then, we can obtain the crossfit ratio as an average between $U_{\frac{n}{2}}$ and $U_{\frac{n}{2}}^{swap}$.
+
+```{r}
+crossfit_lr <- function(U_n, U_n.swap) (U_n + U_n.swap) / 2
+```
+  
+  
+#### **Universal Tests for Directed Pathway**
+
+The *directed pathway* test we are gonna use is expressed by the following formula:
+
+$$
+U_n = \frac{\ell(\hat{\mathbb{A}}, \hat{\sigma}^{2}|D_n)}{\max_{k=1}^{|F|}\ell(\hat{\mathbb{A}_{0,k}}, \hat{\sigma}^{2}_{0,k}|D_n)}
+$$
+
+So, we are interested in testing:
+
+$$
+H_0 : \mathbb{A}[j,k]=0 \qquad for \:some \:(j,k) \in F
+$$
+
+$$
+H_1: \mathbb{A}[j,k] \ne 0 \qquad for \: all \: (j,k) \in F 
+$$
+
+##### **Split Likelihood Ratio for Directed Pathway**
+
+In the Directed Pathway tests, the constrained matrix D is simply a matrix containing the sequence of nodes visited following the path. The function will evaluate a new matrix for *MLEdag()* at each step.
+
+```{r}
+slr.dp <- function(n, p, X, D, A) {
+  # Input:
+  #   n <- number of observations
+  #   p <- number of features
+  #   X <- data matrix
+  #   D <- matrix with the constraints (pathway)
+  #   A <- adjacency matrix
+  
+  # Output: value of the universal test
+  
+  # Split the original dataset into Train and Test
+  # Get the train indexes by random sampling
+  train_idx <- sample(1:n, size = n/2)
+  # Create the two new datasets
+  X.tr <- X[train_idx,]
+  X.te <- X[-train_idx,]
+  n.tr <- length(X.tr[,1]) # Length of the train set
+  n.te <- length(X.te[,1]) # Length of the test set
+  
+  # We want to find the maximum value of the likelihood
+  likelihoods.den <- rep(NA, f)
+  likelihoods.num <- rep(NA, f)
+  for(i in 1:f){
+    D.dp <- matrix(0, p, p)
+    dimnames(D.dp) <- dimnames(A)
+    D.dp[pathway[i,1], pathway[i,2]] <- 1
+    # Find the estimated adjacency matrix from the test dataset
+    A.te <- MLEdag(X = X.te, D = D.dp, tau=0.3, mu=1, rho=1.2, trace_obj = F)$A.H1
+    # Find the estimated sigma from the test dataset
+    sigma.te <- sigma.hat(p, n.te, A.te, X.te)
+    # Compute the log-L of the numerator of the split likelihood ratio 
+    likelihoods.num[i] <- log_likelihood(p, n.tr, A.te, sigma.te, X.tr)
+    # Find the constrained estimate of the adjacency matrix from the train dataset
+    A0.tr <- MLEdag(X = X.tr, D = D.dp, tau=0.3, mu=1, rho=1.2, trace_obj = F)$A.H0
+    # Find the constrained estimate of sigma from the train dataset
+    sigma0.tr <- sigma.hat(p, n.tr, A0.tr, X.tr)
+    # Compute the log-L of the denominator of the split likelihood ratio
+    likelihoods.den[i] <- log_likelihood(p, n.tr, A0.tr, sigma0.tr, X.tr)
+  }
+  
+  # Find the max of the constrained likelihoods and its index
+  curr.max <- likelihoods.den[1]
+  curr.idx <- 1
+  for(i in 2:f){
+    if(likelihoods.den[i] > curr.max){
+      curr.max <- likelihoods.den[i]
+      curr.idx <- i
+    }
+  }
+  # Set the maximum likelihood obtained for l2
+  l2 <- curr.max
+  # Consider the likelihood with the same index, so computed on the same link
+  l1 <- likelihoods.num[curr.idx]
+  
+  # Evaluate the universal test statistic
+  U_n.dp <- l1 - l2
+  
+  return(U_n.dp)
+}
+```
+
+##### **Crossfit Likelihood Ratio for Directed Pathway**
+
+In order to implement the swapped Split Likelihood Ratio we only have to swap the train set with the test one, using the same procedure as before.
+
+```{r}
+slr.dp_swap <- function(n, p, X, D) {
+  # Input:
+  #   n <- number of observations
+  #   p <- number of features
+  #   X <- data matrix
+  #   D <- matrix with the constraints (pathway)
+  #   A <- adjacency matrix
+  
+  # Output: value of the universal test
+  
+  # Split the original dataset into Train and Test
+  # Get the train indexes by random sampling
+  train_idx <- sample(1:n, size = n/2)
+  # Create the two new datasets
+  X.tr <- X[train_idx,]
+  X.te <- X[-train_idx,]
+  n.tr <- length(X.tr[,1]) # Length of the train set
+  n.te <- length(X.te[,1]) # Length of the test set
+  
+  # We want to find the maximum value of the likelihood
+  likelihoods.den <- rep(NA, f)
+  likelihoods.num <- rep(NA, f)
+  for(i in 1:f){
+    D.dp <- matrix(0, p, p)
+    dimnames(D.dp) <- dimnames(A)
+    D.dp[pathway[i,1], pathway[i,2]] <- 1
+    # Find the estimated adjacency matrix from the train dataset
+    A.tr <- MLEdag(X = X.tr, D = D.dp, tau=0.3, mu=1, rho=1.2, trace_obj = F)$A.H1
+    # Find the estimated sigma from the train dataset
+    sigma.tr <- sigma.hat(p, n.tr, A.tr, X.tr)
+    # Compute the log-L of the numerator of the split likelihood ratio 
+    likelihoods.num[i] <- log_likelihood(p, n.te, A.tr, sigma.tr, X.te)
+    # Find the constrained estimate of the adjacency matrix from the test dataset
+    A0.te <- MLEdag(X = X.te, D = D.dp, tau=0.3, mu=1, rho=1.2, trace_obj = F)$A.H0
+    # Find the constrained estimate of sigma from the test dataset
+    sigma0.te <- sigma.hat(p, n.te, A0.te, X.te)
+    # Compute the log-L of the denominator of the split likelihood ratio
+    likelihoods.den[i] <- log_likelihood(p, n.te, A0.te, sigma0.te, X.te)
+  }
+  
+  # Find the max of the constrained likelihoods and its index
+  curr.max <- likelihoods.den[1]
+  curr.idx <- 1
+  for(i in 2:f){
+    if(likelihoods.den[i] > curr.max){
+      curr.max <- likelihoods.den[i]
+      curr.idx <- i
+    }
+  }
+  # Set the maximum likelihood obtained for l2
+  l2 <- curr.max
+  # Consider the likelihood with the same index, so computed on the same link
+  l1 <- likelihoods.num[curr.idx]
+  
+  # Evaluate the universal test statistic
+  U_n.dp <- l1 - l2
+  
+  return(U_n.dp)
+}
+```
+
+Then, we can obtain the crossfit ratio as an average between $U_{\frac{n}{2}}$ and $U_{\frac{n}{2}}^{swap}$.
+
+```{r}
+crossfit_lr <- function(U_n, U_n.swap) (U_n + U_n.swap) / 2
+```
+
+
+
+### 3) Design and run a decent simulation study to check *size* and *power* of your universal test(s) for linkage.
+
+We decided to run simulations with different setups in order to better investigate the behaviour of our universal tests. 
+
+In particular, we are interested to study the *size* and the *power* of our tests. 
+
+- The **size** indicates the probability to reject the null, given that the null is true. It is the probability to claim a false discovery.
+
+- The **power** indicates the probability to reject the null, given that the null is false. It is the probability to claim a true discovery and it is a good measure of how reliable our test is.
+
+All the simulations are done with an $\alpha=0.05$.
+
+#### Simulation 1
+
+First of all, we performed a simulation where $p = 25$ and the adjacency matrix $\mathbb{A}$ is built randomly under the null hypothesis.
+
+```{r}
+# Set the hyperparameters n, p, alpha and a seed for reproducibility
+set.seed(1999)
+n <- 200; p <- 25; alpha <- 0.05; sparsity <- 1/p
+
+# Build the constraints matrix
+D.gl <- matrix(0, p, p)
+
+# Link 3 -> 2
+D.gl[3, 2] <- 1
+
+# Build the adjacency matrix A that respects the null hypothesis
+AH0 <- matrix(rbinom(p*p, 1, sparsity) * sign(runif(p*p, min = -1, max = 1)), p, p)
+AH0[upper.tri(AH0, diag = T)] <- 0
+AH0[3,2] <- 0 # Make sure that H0 is respected
+```
+
+Now, we can simulate under the null, to get the sizes.
+
+```{r}
+M <- 500 # Simulation size
+# Initialize some vectors to store the data
+U.n <- rep(NA, M)
+U.n.swap <- rep(NA, M)
+W.n <- rep(NA, M)
+
+# Simulation
+for(m in 1:M){
+  # Build the X data-matrix under H0
+  X <- matrix(rnorm(n*p), nrow = n, ncol = p) %*% t(solve(diag(p) - AH0))
+  # Compute the Split Likelihood Ratio Test
+  U.n[m] <- slr.gl(n, p, X, D = D.gl)
+  # Compute the the Swap Split Likelihood Ratio
+  U.n.swap[m] <- slr.gl_swap(n, p, X, D = D.gl)
+  # Compute the Crossfit Likelihood Ratio
+  W.n[m] <- crossfit_lr(U.n[m], U.n.swap[m])
+}
+```
+```{r}
+# Check the size of the test <- the probability to reject H0 given that H0 is true
+size <- c(Un = sum(U.n > -log(alpha)) / M,
+          Un_swap = sum(U.n.swap > -log(alpha)) / M,
+          W = sum(W.n > -log(alpha)) / M)
+size
+```
+
+We obtained a very low size for all the three universal tests. If we consider that the test are performed with a $\alpha = 0.05$, we can say that it is oversized.
+
+Now, to check the power, we have to ensure that the adjacency matrix $\mathbb{A}$ respects the alternative hypothesis. It means that the link we want to test has to be in our DAG.
+
+```{r}
+# Build the adjacency matrix A that respects the alternative hypothesis
+AH1 <- matrix(rbinom(p*p, 1, sparsity) * sign(runif(p*p, min = -1, max = 1)), p, p)
+AH1[upper.tri(AH1, diag = T)] <- 0
+AH1[3,2] <- 1 # Make sure that H1 is respected
+```
+
+Now, we can simulate under the alternative, to get the power.
+
+```{r}
+M <- 500 # Simulation size
+U.n_power <- rep(NA, M)
+U.n.swap_power <- rep(NA, M)
+W.n_power <- rep(NA, M)
+
+for(m in 1:M){
+  # Build the X data-matrix under H0
+  X <- matrix(rnorm(n*p), nrow = n, ncol = p) %*% t(solve(diag(p) - AH1))
+  # Compute the Split Likelihood Ratio Test
+  U.n_power[m] <- slr.gl(n, p, X, D = D.gl)
+  # Compute the the Swap Split Likelihood Ratio
+  U.n.swap_power[m] <- slr.gl_swap(n, p, X, D = D.gl)
+  # Compute the Crossfit Likelihood Ratio
+  W.n_power[m] <- crossfit_lr(U.n_power[m], U.n.swap_power[m])
+}
+```
+
+```{r}
+# Check the power of the test <- the probability to reject H0 given that H0 is false
+power <- c(Un = sum(U.n_power > -log(alpha)) / M,
+           Un_swap = sum(U.n.swap_power > -log(alpha)) / M,
+           W = sum(W.n_power > -log(alpha)) / M)
+power
+```
+
+This setup obtains good results also for the power of the test. In the following figure, we have summarized the output of our simulations, in order to visualize better our results. The red line indicates the threshold, the critical value equal to $-\log{\alpha}$ and we can see how the distribution of the test statistic is located with respect to that line.
+
+```{r, echo = FALSE}
+par(mfrow=c(2, 3))
+hist(U.n, breaks=20, prob=T, col='blue', main='Size of Un')
+abline(v = -log(alpha), lwd=3, col='red')
+hist(U.n.swap, breaks=20, prob=T, col='cyan', main='Size of U_swap')
+abline(v = -log(alpha), lwd=3, col='red')
+hist(W.n, breaks=20, prob=T, col='pink', main='Size of W')
+abline(v = -log(alpha), lwd=3, col='red')
+
+hist(U.n_power, breaks=20, prob=T, col='blue', main='Power of Un')
+abline(v = -log(alpha), lwd=3, col='red')
+hist(U.n.swap_power, breaks=20, prob=T, col='cyan', main='Power of U_swap')
+abline(v = -log(alpha), lwd=3, col='red')
+hist(W.n_power, breaks=20, prob=T, col='pink', main='Power of W')
+abline(v = -log(alpha), lwd=3, col='red')
+par(mfrow=c(1,1))
+```
+
+We expected these kind of results for this particular simulation because the completely random nature of our adjacency matrix makes the test really able to discover if the link we checked is there or not. Let's try with a different setup.
+
+#### Simulation 2
+
+Then, we decided to try another simulation, keeping the same $n$ and $p$ but changing the adjacency matrix. So, we build an adjacency matrix as a *hub* where the link we want to test is the only one that is missing in there. We expect the results to be worse, because now it is more difficult to get a right prediction. Keeping the same code, the output we got is the following:
+
+```{r, echo=FALSE}
+set.seed(1999)
+n <- 200; p <- 25; alpha <- 0.05; sparsity <- 1/p
+
+# Build the constraints matrix
+D.gl <- matrix(0, p, p)
+D.gl[3, 1] <- 1
+
+# Build the adjacency matrix A that respects the null hypothesis
+# Hub
+AH0      <- matrix(0, p, p)
+AH0[, 1] <- sign(runif(p, min = -1, max = 1))
+AH0[1, 1] <- 0
+AH0[3, 1] <- 0 # Make sure that H0 is respected
+```
+
+
+```{r, echo=FALSE}
+M <- 500 # Simulation size
+# Initialize some vectors to store the data
+U.n <- rep(NA, M)
+U.n.swap <- rep(NA, M)
+W.n <- rep(NA, M)
+
+# Simulation
+for(m in 1:M){
+  # Build the X data-matrix under H0
+  X <- matrix(rnorm(n*p), nrow = n, ncol = p) %*% t(solve(diag(p) - AH0))
+  # Compute the Split Likelihood Ratio Test
+  U.n[m] <- slr.gl(n, p, X, D = D.gl)
+  # Compute the the Swap Split Likelihood Ratio
+  U.n.swap[m] <- slr.gl_swap(n, p, X, D = D.gl)
+  # Compute the Crossfit Likelihood Ratio
+  W.n[m] <- crossfit_lr(U.n[m], U.n.swap[m])
+}
+```
+
+```{r, echo=FALSE}
+# Check the size of the test <- the probability to reject H0 given that H0 is true
+size <- c(Un = sum(U.n > -log(alpha)) / M,
+          Un_swap = sum(U.n.swap > -log(alpha)) / M,
+          W = sum(W.n > -log(alpha)) / M)
+cat('---size---\n', size)
+```
+
+Now, we got a pretty high size. As expected the test isn't as good as before and we have an higher chance to make a false discovery. 
+
+```{r, echo=FALSE}
+# Build the adjacency matrix A that respects the alternative hypothesis
+# Hub
+AH1       <- matrix(0, p, p)
+AH1[,  1] <- sign(runif(p, min = -1, max = 1))
+AH1[1, 1] <- 0
+AH1[3, 1] <- 1 # Make sure that H1 is respected
+```
+
+```{r, echo=FALSE}
+M <- 500 # Simulation size
+U.n_power <- rep(NA, M)
+U.n.swap_power <- rep(NA, M)
+W.n_power <- rep(NA, M)
+
+for(m in 1:M){
+  # Build the X data-matrix under H0
+  X <- matrix(rnorm(n*p), nrow = n, ncol = p) %*% t(solve(diag(p) - AH1))
+  # Compute the Split Likelihood Ratio Test
+  U.n_power[m] <- slr.gl(n, p, X, D = D.gl)
+  # Compute the the Swap Split Likelihood Ratio
+  U.n.swap_power[m] <- slr.gl_swap(n, p, X, D = D.gl)
+  # Compute the Crossfit Likelihood Ratio
+  W.n_power[m] <- crossfit_lr(U.n_power[m], U.n.swap_power[m])
+}
+```
+
+```{r, echo=FALSE}
+# Check the power of the test <- the probability to reject H0 given that H0 is false
+power <- c(Un = sum(U.n_power > -log(alpha)) / M,
+           Un_swap = sum(U.n.swap_power > -log(alpha)) / M,
+           W = sum(W.n_power > -log(alpha)) / M)
+cat('---power---\n', power)
+```
+
+The test has also a lower power now. It recognized that the link is actually there only 62% of the time for the SLR-Test and only 64% of the time for the CLR-Test.
+
+The following figure summarizes the results of this simulation and we are able to notice the differences from the previous ones, only changing the adjacency matrix.
+
+```{r, echo = FALSE}
+par(mfrow=c(2, 3))
+hist(U.n, breaks=20, prob=T, col='blue', main='Size of Un')
+abline(v = -log(alpha), lwd=3, col='red')
+hist(U.n.swap, breaks=20, prob=T, col='cyan', main='Size of U_swap')
+abline(v = -log(alpha), lwd=3, col='red')
+hist(W.n, breaks=20, prob=T, col='pink', main='Size of W')
+abline(v = -log(alpha), lwd=3, col='red')
+
+hist(U.n_power, breaks=20, prob=T, col='blue', main='Power of Un')
+abline(v = -log(alpha), lwd=3, col='red')
+hist(U.n.swap_power, breaks=20, prob=T, col='cyan', main='Power of U_swap')
+abline(v = -log(alpha), lwd=3, col='red')
+hist(W.n_power, breaks=20, prob=T, col='pink', main='Power of W')
+abline(v = -log(alpha), lwd=3, col='red')
+par(mfrow=c(1,1))
+```
+
+In conclusion, we can say that this Universal Tests suffer a DAG built as an hub and they got worse results with it compared with the ones obtained with a completely random DAG. 
+
+In addition, it's clear how the Cross-fit Likelihood Ratio turns out to be more powerful and with an higher size. This is because, with the CLR-Test, we check our hypothesis considering the log-likelihoods from the entire dataset and not only from the train set or from the test set.
+
+Moreover, we tried other setups, both with fewer and more features $p$ (nodes in the graph) and we noticed that, as we reduce them, we got better results. This is because the obtained graph is simpler and it is easier to verify the hypothesis. Infact, increasing $p$, we obtained, for the same reason, slightly worse results.
+
+Anyway, we noticed that changing the seed of the simulations can produce deep variations in the results. 
+
+### 4) Formalize at least 3 linkage-type hypotheses and 1 pathway-type hypothesis that you feel it may be interesting to double-check with your own toolkit.
+
+#### **Linkage type hypothesis**
+
+* **PKC -> PKA** *(Reported)*
+
+* **Raf -> Mek** *(Expected)*
+
+* **PIP3 -> Akt** *(Missed)*
+
+We chose three different types of links, since we wanted to highlight the different responses on the structure and compare them to the results found by the scientists. To achieve this, we picked:
+
+1) the *expected* link Raf - Mek which is a well-established connection, for which we have many citations in the literature and that has alredy been demonstrated under numerous conditions in multiple model systems;
+
+2) the *reported* link PKC - PKA which is a connection that has not yet been studied thoroughly, but for which it has been possible to find at least one literature citation;
+
+3) the *missing* link PIP3 - Akt which is an expected connection that Sachs et al. failed to recognize with their system.
+
+We have found very important to check at first the capability of our procedures to predict the expected connection, then to test it to find a reported connection. Last but not least, we were very interested in seeing how the universal tests would have handled the missing type of connections.
+
+#### **Pathway type hypothesis**
+
+* **PKC -> Mek -> Erk -> Akt** *(expected - expected - reported)*
+
+As for the pathway test, we chose one involving both expected and reported connections, for the same reasons.
+
+We implemented the adjacency matrix of the DAG, following the Figure 2. We decided to set equal to 1 the weight of all the three types of links.
+
+```{r}
+# Initialize the matrix
+A = matrix(0, ncol = 11, nrow = 11)
+# Give A the names of the proteins and lipids
+dimnames(A) = list(c("PKC", "PKA", "Raf", "P38", "Jnk","Plc", "PIP3", "Mek", "Erk", "Akt", "PIP2"),
+                   c("PKC", "PKA", "Raf", "P38", "Jnk", "Plc", "PIP3", "Mek", "Erk", "Akt", "PIP2"))  
+
+# Set the directed edges as two separated vectors, in order to iterate on them and build A
+edge_one <- c("PKC", "PKC", "PKC", "PKC", "PKC", "PKA", "PKA", "PKA", "PKA", "PKA", "PKA", 
+              "Raf", "Mek", "Erk", "Plc", "Plc", "Plc", "PIP2", "PIP3", "PIP3")
+edge_two <- c("Jnk", "PKA", "Raf", "P38", "Mek", "Jnk", "P38", "Akt", "Erk", "Mek", "Raf", 
+              "Mek", "Erk", "Akt", "PIP2", "PIP3", "PKC", "PKC", "PIP2", "Akt")
+
+# Build the adjacency matrix
+for (i in 1:length(edge_one)){
+  A[edge_one[i], edge_two[i]] <- 1
+}
+```
+
+Let's see the obtained DAG.
+
+```{r, warning=F, echo=F}
+# Load the required library
+suppressMessages( require(igraph, quietly = T ) )
+g  <- graph.adjacency(A, weighted = TRUE)
+
+# Visualization of the graph
+plot( g, 
+      edge.arrow.size = .15,
+      vertex.frame.color = "blue", vertex.label.color = "black", 
+      vertex.label.cex = 0.8, vertex.label.dist = 2, edge.curved = 0.2,
+      layout = layout_with_gem )
+```
+
+
+### 5) Select one specific intervention out of the 9 available and, based on those data only, test your set of hypotheses using both, your universal procedures and the asymptotics implemented in the *MLEdag()* function. Compare the results also as you let the sparsity parameter $\kappa$ vary.
+
+To test our set of hypothesis we have selected only the data coming from the third intervention (*cd3cd28+aktinhib*). We know that *MLEdag()* need to work with zero-mean Gaussians, so we have to scale and normalize our data before starting the analysis.
+
+We have used the function *boxcox* from the library *bestNormalize*.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+require(bestNormalize)
+require(readxl)
+```
+
+
+```{r}
+# Load the data
+obs <- read_xlsx("cytometry-data.xlsx", sheet = '3. cd3cd28+aktinhib')
+obs <- as.data.frame(obs)
+set.seed(1999)
+
+# we create a matrix to store our normalized data
+data <- matrix(NA, nrow=dim(obs)[1], ncol=dim(obs)[2])
+for(i in 1:length(obs[1,])){
+  out <- boxcox(obs[,i], standardize = TRUE)$x.t
+  data[,i] = out
+}
+```
+
+The following plots represent the distribution (after the standardization) of the variables **pmek** and **PKC**, which we chose among the others because of their peculiar behaviours. As a matter of fact, we can see that *PKC* matches almost perfectly the theoretical quantiles in the qqplot, while *pmek*'s sample quantiles differs from the theoretical in the tails. Anyway, all the variables have been normalized.
+
+```{r, echo = FALSE}
+# Plot a boxplot, an histogram, a qqplot and the empirical CDF
+for (i in c(2,9)){
+  par(mfrow=c(2, 2))
+  boxplot(data[,i], col = 'pink', main = names(obs)[i])
+  hist(out, prob = T, col = 'pink', main = names(obs)[i], xlab='', ylab='')
+  curve(dnorm(x, mean = mean(data[,i]), sd = sd(data[,i])), add = T, lwd = 3, col = 'blue')
+  qqnorm(data[,i], pch = 16)
+  qqline(data[,i], lwd = 3, col = 'blue')
+  plot(ecdf(data[,i]), col = 'pink', main = names(obs)[i])
+  curve(pnorm(x, mean = mean(data[,i]), sd = sd(data[,i])), add = T, lwd=3, col='blue')
+}
+```
+
+In this section, we have run the tests on the edges that we had previously commented, with $\alpha=0.05$.
+
+```{r}
+# Initialize parameters for the tests
+p <- length(data[1,]) # col
+n <- length(data[,1]) # rows
+
+# Linear structural equation model
+X <- data %*% t(solve(diag(p) - A))
+
+# Values for mu
+mu_s = c(0.1, 0.5, 1, 2, 5)
+```
+
+- The first test we run is the one on the *reported* linkage type. As we said, we tested the edge *PKC -> PKA*:
+
+```{r}
+# Constraint matrix
+D <- matrix(0, p, p)
+dimnames(D) <- dimnames(A)
+D['PKC', 'PKA'] <- 1
+
+# Split Likelihood Ratio Test
+reported <- slr.gl(n, p, X = X, D = D) 
+reported > -log(0.05)
+```
+
+We reject the null hypotheses.
+
+```{r}
+# MLEdag tests
+pkc_pka = rep(NA, length(mu_s))
+for(i in 1:length(mu_s)){
+  p_val <- MLEdag(X = X, D = D, tau=0.3, mu=mu_s[i], rho=1.2, trace_obj = F)$pval
+  pkc_pka[i] <- (p_val < 0.05)
+}
+pkc_pka
+```
+
+We reject the null hyphotesis with all the values of $\kappa$ - meaning that we reject the hyphotesis of non-existence of the edge. The result, as expected, confirms what stated by many researches, we have a link between *PKC -> PKA*. 
+
+- The second test we run is the one on the *expected* linkage type. As we said, we tested the edge *Raf -> Mek*:
+
+```{r}
+# Constraint matrix
+D <- matrix(0, p, p)
+dimnames(D) <- dimnames(A)
+D['Raf', 'Mek'] <- 1
+
+# Split Likelihood Ratio test
+expected <- slr.gl(n, p, X = X, D = D) 
+expected > -log(0.05)
+```
+
+```{r}
+# MLEdag tests
+raf_mek = rep(NA, length(mu_s))
+for(i in 1:length(mu_s)){
+  p_val <- MLEdag(X = X, D = D, tau=0.3, mu=mu_s[i], rho=1.2, trace_obj = F)$pval
+  raf_mek[i] <- (p_val < 0.05)
+}
+raf_mek
+```
+
+Again, we rejected the null hyphotesis, both with the universal test and with *MLEdag*: as a matter of fact, the tested edge is expected to exist.
+
+- The third test we run is the one on the *missing* linkage type. As we said, we tested the edge *Pip3 -> Akt*:
+
+```{r}
+# Constraint matrix
+D <- matrix(0, p, p)
+dimnames(D) <- dimnames(A)
+D['PIP3', 'Akt'] <- 1
+
+# Split Likelihood Ratio test
+missing <- slr.gl(n, p, X = X, D = D)
+missing > -log(0.05)
+```
+
+In this last test on the linkage-types, the test failed to recognize a link between *phosphatidylinositol (3,4,5)-trisphosphate (PIP3)* and *protein kinase B (Akt)*. Infact, we don't reject the null, resulting in the non-existence of the link.
+The result reflects the achievements of Sachs et al that categorized that link as a missing one. Let's compare it with MLEdag.
+
+```{r}
+# MLEdag tests
+pip3_akt = rep(NA, length(mu_s))
+for(i in 1:length(mu_s)){
+  p_val <- MLEdag(X = X, D = D, tau=0.3, mu=mu_s[i], rho=1.2, trace_obj = F)$pval
+  pip3_akt[i] <- (p_val < 0.05)
+}
+pip3_akt
+```
+
+In this case we reject the null hypothesis, so according to these tests, the link *Pip3->Akt* exists. This can be because we set equal to 1 in our graph even the "missing" links.
+
+- After testing the linkage-types, we moved to the *pathway* test, considering the path *PKC -> Mek -> Erk -> Akt*:
+
+```{r}
+# Number of links in the path
+f <- 3
+# Nodes in the path
+nodes <- list('PKC', 'Mek', 'Erk', 'Akt')
+
+# Matrix of constraints
+pathway <- matrix(0, f, 2)
+for(i in 1:f) {
+  pathway[i,1] <- nodes[[i]]
+  pathway[i,2] <- nodes[[i+1]] 
+}
+
+# Split Likelihood Ratio test
+pathway <- slr.dp(n, p, X=X, D=pathway, A=A)
+cat('Result - Test value\n', as.logical(pathway > -log(0.05)), '---', pathway)
+```
+
+We don't reject the null hypothesis, the SLR test doesn't recognize the presence of that specific path. Anyway, the test value is very close to the critical value, so we can't be sure of the result. Let's compare it with the one obtained with the MLEdag test.
+
+```{r}
+# MLEdag tests
+
+# Constraints matrix
+D <- matrix(0, p, p)
+dimnames(D) <- dimnames(A)
+D[pathway] <- 1
+
+path = rep(NA, length(mu_s))
+for(i in 1:length(mu_s)){
+  p_val <- MLEdag(X = X, D = D, tau=0.3, mu=mu_s[i], rho=1.2, trace_obj = F)$pval
+  path[i] <- (p_val < 0.05)
+}
+path
+```
+
+With the MLEdag test, we always reject the null hypothesis with all the chosen values for $\kappa$. It means that the existence of a path between those nodes is confirmed, as expected from the original DAG. 
+
+At the end of all these tests, we can remark that changing $\kappa$ has not produced any effect on the output of our tests. The final result remains always the same in all our tests.
+
+### 6) Repeat the previous analysis augmenting the data by stacking together those coming from different conditions. Compare the results with those in 5 and draw some conclusions.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse)
+```
+
+We repeated all the previous tests on the entire dataset, comparing the new results with the ones previously obtained and ascertaining that they are consistent with them.
+
+```{r}
+# Accessing all the sheets 
+sheet = excel_sheets("cytometry-data.xlsx")
+
+# Applying sheet names to dataframe names
+obs_df = lapply(setNames(sheet, sheet), 
+                function(x) read_excel("cytometry-data.xlsx", sheet=x))
+
+# Attaching all dataframes together
+obs_df = as.data.frame(bind_rows(obs_df))
+```
+
+As before, in order to perform our analysis we need to standardize our data. We use again the function *boxcox* from the library *bestNormalize*.
+
+```{r}
+# Standardization
+obs_data <- matrix(NA, nrow=dim(obs_df)[1], ncol=dim(obs_df)[2])
+for(i in 1:length(obs_df[1,])){
+  out <- boxcox(obs_df[,i], standardize = TRUE)$x.t
+  obs_data[,i] = out
+}
+
+# After merging and normalizing the data, we do the tests.
+# Set the parameters
+p <- length(obs_data[1,])
+n <- length(obs_data[,1])
+# Linear structural equation model
+obs_X <- obs_data %*% t(solve(diag(p) - A))
+```
+
+- *PKC -> PKA* tested on entire dataset:
+
+```{r}
+# Constraint matrix
+obs_D <- matrix(0, p, p)
+dimnames(obs_D) <- dimnames(A)
+obs_D['PKC', 'PKA'] <- 1
+
+# Split Likelihood Ratio test
+reported_all <- slr.gl(n, p, X = obs_X, D = obs_D) 
+reported_all > -log(0.05)
+
+#MLEdag test
+pkc_pka_res = rep(NA, ncol=length(mu_s))
+for(i in 1:length(mu_s)){
+  p_val <- MLEdag(X = obs_X, D = obs_D, tau=0.3, mu=mu_s[i], rho=1.2, trace_obj = F)$pval
+  pkc_pka_res[i] <- (p_val < 0.05)
+}
+pkc_pka_res
+```
+
+We reject the null hypothesis both with SLR and *MLEdag*, so nothing changed from the test on the partial dataset. As expected, there is a link between *PKC -> PKA*.
+
+- *Raf -> Mek* tested on entire dataset: 
+
+```{r}
+# Constraint matrix
+obs_D <- matrix(0, p, p)
+dimnames(obs_D) <- dimnames(A)
+obs_D['Raf', 'Mek'] <- 1
+
+# Split Likelihood Ratio test
+expected_all <- slr.gl(n, p, X = obs_X, D = obs_D)
+expected_all > -log(0.05)
+
+#MLEdag test
+raf_mek_res = rep(NA, length(mu_s))
+for(i in 1:length(mu_s)){
+  p_val <- MLEdag(X = obs_X, D = obs_D, tau=0.3, mu=mu_s[i], rho=1.2, trace_obj = F)$pval
+  raf_mek_res[i] <- (p_val < 0.05)
+}
+raf_mek_res
+```
+
+We reject the null hypothesis both with SLR and *MLEdag*, so nothing changed from the test on the partial dataset. As expected, there is a link between *Raf -> Mek*.
+
+- *Pip3 -> Akt* tested on entire dataset:
+
+```{r}
+# Constraint matrix
+obs_D <- matrix(0, p, p)
+dimnames(obs_D) <- dimnames(A)
+obs_D['PIP3', 'Akt'] <- 1
+
+# Split Likelihood Ratio test
+missed_all <- slr.gl(n, p, X = obs_X, D = obs_D) 
+missed_all > -log(0.05)
+
+# MLEdag test
+pip_akt_res = rep(NA, length(mu_s))
+for(i in 1:length(mu_s)){
+  p_val <- MLEdag(X = obs_X, D = obs_D, tau=0.3, mu=mu_s[i], rho=1.2, trace_obj = F)$pval
+  pip_akt_res[i] <- (p_val < 0.05)
+}
+pip_akt_res
+```
+
+Considering the entire dataset, we reject the null for the missing-type link *Pip3 -> Akt*, both for the SLR and the MLEdag. Maybe, with the data from all the interventions, we are able to see the expected connection that the network failed to find.
+
+Now, we perform the test for the directed pathway on the entire dataset.
+
+- *PKC -> Mek -> Erk -> Akt* tested on entire dataset:
+
+```{r}
+# Number of links in the path
+f <- 3
+# Nodes in the path
+nodes <- list('PKC', 'Mek', 'Erk', 'Akt')
+
+# Matrix of constraints
+pathway <- matrix(0, f, 2)
+for(i in 1:f) {
+  pathway[i,1] <- nodes[[i]]
+  pathway[i,2] <- nodes[[i+1]] 
+}
+
+# Split Likelihood Ratio test
+pathway_all <- slr.dp(n, p, X=obs_X, D=pathway, A=A)
+pathway_all > -log(0.05)
+
+# MLEdag test
+D <- matrix(0, p, p)
+dimnames(D) <- dimnames(A)
+D[pathway] <- 1
+
+path_res = rep(NA, length(mu_s))
+for(i in 1:length(mu_s)){
+  p_val <- MLEdag(X = obs_X, D = obs_D, tau=0.3, mu=mu_s[i], rho=1.2, trace_obj = F)$pval
+  path_res[i] <- (p_val < 0.05)
+}
+path_res
+```
+
+Now, considering the entire dataset we reject the null hypothesis both with SLR-Test and MLEdag. So, the path *PKC -> Mek -> Erk -> Akt* exists on the entire dataset with all the interventions, but we are not sure of its existance in the third intervention tested before. 
+
+#### Do you think we need to adjust for multiplicity here? Explain.
+
+The multiplicity problem occurs when we deal with multiple null hypothesis based on the same data. We can control the error probability of each individual test but we haven't any statistical safeguard at the family-wise level.
+
+In our case, we deal with multiple hypothesis on single links based on the same graph. We are interested to know if these links exist simultaneously in the DAG, so we can adjust for multiplicty.
+
+The easiest way to control the family–wise error rate at level alpha is the Bonferroni method.
+
+In particular, the Bonferroni has the following Decision Rule: Reject $H_k^{(0)}$ if: $p < \frac{\alpha}{m}$, where $m$ is the number of tests we conduct and $p$ is the test value.
+
+In our case $m = 3$ because we do three tests on the links. So, we compared our results with this new critical value.
+
+```{r}
+# Set multiplicity value
+m <- 3
+```
+
+- Reported linkage type: *PKC->PKA*:
+
+```{r}
+# Constraint matrix
+obs_D <- matrix(0, p, p)
+dimnames(obs_D) <- dimnames(A)
+obs_D['PKC', 'PKA'] <- 1
+
+# MLEdag test adjusted for multiplicity
+p_val <- MLEdag(X = obs_X, D = obs_D, tau=0.3, mu=1, rho=1.2, trace_obj = F)$pval
+p_val < 0.05/m
+```
+
+- Expected linkage type: *Raf->Mek*:
+
+```{r}
+# Constraint matrix
+obs_D <- matrix(0, p, p)
+dimnames(obs_D) <- dimnames(A)
+obs_D['Raf', 'Mek'] <- 1
+
+# MLEdag test adjusted for multiplicity
+p_val <- MLEdag(X = obs_X, D = obs_D, tau=0.3, mu=1, rho=1.2, trace_obj = F)$pval
+p_val < 0.05/m
+```
+
+- Missed linkage type: *Pip3->Akt*:
+
+```{r}
+# Constraint matrix
+obs_D <- matrix(0, p, p)
+dimnames(obs_D) <- dimnames(A)
+obs_D['PIP3', 'Akt'] <- 1
+
+# MLEdag test adjusted for multiplicity
+p_val <- MLEdag(X = obs_X, D = obs_D, tau=0.3, mu=1, rho=1.2, trace_obj = F)$pval
+p_val < 0.05/m
+```
+
+We obtain the same results as before, we always reject the null hypothesis. We can say that the three links exist simultaneously on the same DAG.
+
+#### Why do you think we can talk about causal relations in the context of this applications?
+
+As explained in the paper *"Causal Protein-Signaling Networks Derived from Multiparameter Single-Cell Data"* written by Karen Sachs et al., we may define our graph a Bayesian networks with multivariable individual-cell data. The presence of a directed ark from a node X onto node Y - where nodes represent variables - means that there is a causal influence from X onto Y. X is said to be the "parent" of Y in the network, as described in graph theory. 
+
+As stated in the paper: *"in the case that X activate Y, where activation can be read out as phosphorylation status, we expect and observe correlation in levels of phosphorylation as measured by flow-citometry."*
+
+For instance, if we consider our sample - and the relation between PKC and PKA -, the inhibition of molecule PKC might lead to inhibition of both PKC and PKA, whereas inhibition of molecule PKA leads only to inhibition of PKA. Thus, we would infer PKC to be upstream of PKA.
+
+Such a structure as a direct graph could be chosen to model the interactions among molecules since it is a proper description of their natural behaviours. Infact, during the study they conducted, the scientists caused perturbation on the cells, exploiting chemical stimulators/inhibitors. These interventions generate a domino-effect, exactly as intuitively depicted by a direct graph.
