@@ -1,0 +1,1083 @@
+---
+title: "Final Project - Statistical Methods in Data Science II"
+subtitle: "Bayesian hierarchical models for the prediction of football results"
+author: "Davide Cacciatore - 2015641"
+output:
+  pdf_document:
+    keep_tex: yes
+    toc: no
+  html_document:
+    keep_md: yes
+    theme: united
+header-includes: 
+              - \usepackage[english]{babel}
+              - \usepackage{amsfonts}
+              - \usepackage{amsmath}
+              - \usepackage{enumerate}
+              - \usepackage{setspace}
+              - \usepackage{docmute}
+              - \usepackage{fancyhdr}
+              - \usepackage{graphicx}
+              - \usepackage{rotating}
+              - \usepackage{ucs}
+              - \pagestyle{fancy}
+              - \fancyhf{}
+              - \rhead{Final Project - SMDS2 - Davide Cacciatore}
+              - \cfoot{\thepage}
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+
+knitr::opts_chunk$set(echo = TRUE)
+
+# the default output hook
+hook_output = knit_hooks$get('output')
+knit_hooks$set(output = function(x, options) {
+  if (!is.null(n <- options$out.lines)) {
+    x = unlist(stringr::str_split(x, '\n'))
+    if (length(x) > n) {
+      # truncate the output
+      x = c(head(x, n), '....\n')
+    }
+    x = paste(x, collapse = '\n') # paste first n lines together
+  }
+  hook_output(x, options)
+})
+```
+
+```{r, include=FALSE, include=FALSE, warning=FALSE}
+opts_chunk$set(out.lines = 23)
+```
+
+\tableofcontents
+
+\newpage
+
+\section{1 Introduction}
+
+Statistical modelling of sports data is a popular topic and much research has been produced for this purpose, also with reference to football.
+
+For this project, we considered the work done by Baio & Blangiardo (2010) to model football results during a Serie A season. We attempted to apply their first model, assuming two conditionally independent Poisson variables for the number of goals scored. Next, we will attempt to compare its performance with a Negative Binomial model proposed in past work (Pollard et al. 1977) and with a frequentist approach. We applied these models to the 2021-2022 Italian Serie A data.
+
+\section{2 Data}
+
+We took data for the Italian Serie A 2021-2022 from a Kaggle dataset called [*Football Data from Transfermarkt*](https://www.kaggle.com/datasets/davidcariboo/player-scores), which contains structured and automatically updated football data scraped from the Transfermarkt website on all the European matches. We used MySQL Workbench to execute an SQL query, available in the Appendix, to extract only data from the last Serie A season.
+
+\subsection{2.1 Preprocessing}
+
+We had to perform several preprocessing steps on the dataset, in order to obtain the same data structure as the paper.
+\begin{itemize}
+\item We noticed that three matches were missing in the dataset and we inserted them manually.
+\item We replaced the column with the 'matchdays' with an increasing number from 1 to 38 indicating the Serie A round.
+\item We added an ID for each match, an increasing number from 1 to 380 identifying the individual match played.
+\item We renamed the team names legibly.
+\item We assigned, in alphabetical order, some indices uniquely associated with the 20 teams.
+\end{itemize}
+
+
+In the following tables, we can see the final structure of the data.
+
+```{r, echo=F}
+setwd("C:/Users/dcacc/Desktop/File/DAVIDE/Universita_ROMA/SDS II/Final project")
+# Load data
+games <- read.csv('data/games_data.csv')
+```
+
+```{r}
+head(games)
+tail(games)
+```
+
+It consists of the match code *g*, the name of the teams, the number of goals scored per match (*Yg1* and *Yg2*) by the two teams, and the indexes *h.g* and *a.g* uniquely associated with each team. For example, Napoli is always associated with index 12, whether it plays away, as in *a(375)*, or at home, as in *h(3)*.
+
+\subsection{2.2 Exploratory Data Analysis}
+
+We can study the summary of the variable of goals scored at home (*Yg1*) and the variable of goal scored away (*Yg2*).
+
+```{r}
+summary(games$Yg1)
+summary(games$Yg2)
+```
+
+We can observe that the average number of goals scored at home is slightly higher than the average number of goals scored away. This is an expected result, because it is a well-known phenomenon: the home team has a small advantage over its opponent. Later, this small difference will be taken into account in the structure of the model. Let us look at the plots of these distributions.
+
+```{r, echo=F}
+#Plots
+par(mfrow=c(2, 3))
+plot(prop.table(table(games$Yg1 + games$Yg2)), ylab = '', 
+     main = 'Goals scored \n in a match',
+     col = 'coral2', lwd = 10,
+     ylim = c(0, 0.4))
+plot(prop.table(table(games$Yg1)), ylab = '', 
+     main = 'Goals scored \n at home', 
+     col = 'darkorange', lwd = 10,
+     ylim = c(0, 0.4))
+plot(prop.table(table(games$Yg2)), ylab = '', 
+     main = 'Goals scored away',
+     col = 'dodgerblue', lwd = 10,
+     ylim = c(0, 0.4))
+boxplot((games$Yg1 + games$Yg2), main = 'Goals scored \n in a match',
+        col = 'coral2')
+boxplot(games$Yg1, main = 'Goals scored \n at home', col = 'darkorange',
+        ylim = c(0,8))
+boxplot(games$Yg2, main = 'Goals scored away', col = 'dodgerblue',
+        ylim = c(0,8))
+par(mfrow=c(1, 1))
+```
+
+Obviously, we can see the differences between the three results. On the left, we found the distribution of total goals scored in a match, in the middle we have the goals scored at home and on the right the goals scored away. Looking at the shape of the distributions and their discrete nature, it is clear that a good choice for the known distribution in our model could be a Poisson or a Negative Binomial.
+
+\section{3. Bayesian Hierarchical Model}
+
+The first model we decided to implement is the one described by Baio & Blangiardo. The Italian Serie A league consists of a total of 20 teams, which face each other twice in a season (once home and once away). The number of goals scored by the home and away teams in the *g*-th game of the season (*g*=1, ..., 380) are indicated by the variables *Yg1* and *Yg2*. The two distributions can be modelled as two conditionally independent Poissons.
+\begin{eqnarray*}
+Y_{g1} &\sim& \text{Poisson}(\theta_{g1}) \\
+Y_{g2} &\sim& \text{Poisson}(\theta_{g2})
+\end{eqnarray*}
+The parameters $\theta_{g1}$ and $\theta_{g2}$ represent the scoring intensity in the *g*-th game for the home and away team, respectively. These parameters are modelled according to a formulation widely used in the statistical literature (Karlis & Ntzoufras 2003), assuming a log-linear random effects model:
+\begin{eqnarray*}
+\log{\theta_{g1}} &=& \text{home} + \text{att}_{h(g)} + \text{def}_{a(g)} \\
+\log{\theta_{g2}} &=& \text{att}_{a(g)} + \text{def}_{h(g)}
+\end{eqnarray*}
+The parameter *home* represents the previous observed advantage for the team hosting the match; we can assume that this effect is constant for all teams and throughout the season. However, the intensity of the score is jointly determined by the attacking and defensive capabilities of the two teams involved, represented by the parameters *att* and *def*, respectively. The indexes *h(g)* and *a(g)* identify the team playing home or away in the *g*-th game of the season.
+
+It is therefore necessary to specify some suitable prior distributions for all the random parameters of the model. We can assume a flat prior distribution for the *home* parameter (described in terms of mean and precision).
+\begin{eqnarray*}
+\text{home} \sim \text{Normal}(0, 0.0001)
+\end{eqnarray*}
+The team-specific effects are modelled as exchangeable from a common distribution.
+\begin{eqnarray*}
+\text{att}_t &\sim& \text{Normal}(\mu_{\text{att}}, \tau_{\text{att}}) \\
+\text{def}_t &\sim& \text{Normal}(\mu_{\text{def}}, \tau_{\text{def}})
+\end{eqnarray*}
+We need to impose the zero-sum constraint to these parameters: $\sum_{t=1}^T \text{att}_t = 0$ and $\sum_{t=1}^T \text{def}_t = 0$. In this way, the overall effects of attack and defence will be zero.
+
+Finally, the hyper-priors of attack and defence effects are modelled independently using flat prior distributions once again:
+\begin{eqnarray*}
+\mu_{\text{att}} &\sim& \text{Normal}(0, 0.001) \\
+\tau_{\text{att}} &\sim& \text{Gamma}(0.1, 0.1) \\
+\mu_{\text{def}} &\sim& \text{Normal}(0, 0.001) \\
+\tau_{\text{def}} &\sim& \text{Gamma}(0.1, 0.1)
+\end{eqnarray*}
+The model implemented in JAGS is as follows:
+
+    model {
+      # Likelihoods
+      for (g in 1:Ngames) {
+        Y1[g] ~ dpois(theta[g,1])
+        Y2[g] ~ dpois(theta[g,2])
+        
+        # Log-linear model
+        log(theta[g,1]) <- home + att[hometeam[g]] + def[awayteam[g]]
+        log(theta[g,2]) <- att[awayteam[g]] + def[hometeam[g]]
+        }
+      
+      # Home parameter
+      home ~ dnorm(0, 0.0001)
+      
+      # Team-specific effects
+      for (t in 1:Nteams) {
+        att.star[t] ~ dnorm(mu.att, tau.att)
+        def.star[t] ~ dnorm(mu.def, tau.def)
+        # Zero-sum constraints
+        att[t] <- att.star[t] - mean(att.star[])
+        def[t] <- def.star[t] - mean(def.star[])
+      }
+      
+      # Hyper parameters priors
+      mu.att ~ dnorm(0, 0.0001)
+      mu.def ~ dnorm(0, 0.0001)
+      tau.att ~ dgamma(0.01, 0.01)
+      tau.def ~ dgamma(0.01, 0.01)
+    }
+
+\subsection{3.1 RJags}
+
+We can perform our Bayesian analysis using the *JAGS* software and interacting with it via the R package *R2Jags*. The software requires data in list format, a vector of parameters of interest and the model stored in an external file.
+
+```{r, echo=F, message=FALSE, warning=FALSE}
+library(R2jags)
+library(bayesplot)
+library(gridExtra)
+```
+
+
+```{r}
+# Data for Jags
+games.data <- list(hometeam = games$h.g,
+                   awayteam = games$a.g,
+                   Y1 = games$Yg1,
+                   Y2 = games$Yg2,
+                   Ngames = length(games[,1]),
+                   Nteams = 20)
+
+# Vector of parameters
+param <- c('home', 'att', 'def')
+```
+
+We decided to consider the 'home' parameter and the effects of the attack and defence of all 20 Serie A teams. In the detailed analysis, for reasons of time and space, we will only focus on the parameters related to the 4 best teams of the 2021-2022 Serie A: Milan, Inter, Napoli and Juventus.
+
+```{r, warning = F}
+set.seed(1999) # seed for reproducibility
+
+# Run the model with jags
+games.jags <- jags(data = games.data, 
+                   parameters.to.save = param,
+                   model.file = 'model_1.txt',
+                   n.iter = 2000, n.chains = 3)
+```
+
+We can visualize the results in a nice way, to better understand the behaviour of different clubs.
+
+```{r, echo=F, fig.show="hold"}
+library(gt)
+library(gtExtras)
+
+# All the teams 
+teams <- c('Atalanta', 'Bologna', 'Cagliari', 'Empoli', 'Fiorentina', 'Genoa', 'Hellas Verona',
+           'Inter', 'Juventus', 'Lazio', 'Milan', 'Napoli', 'Roma', 'Salernitana', 'Sampdoria',
+           'Sassuolo', 'Spezia', 'Torino', 'Udinese', 'Venezia')
+
+# attack effect
+dt.att <- as.data.frame(cbind(round(games.jags$BUGSoutput$summary[1:20, "mean"], 3),
+                              round(games.jags$BUGSoutput$summary[1:20, "2.5%"], 3),
+                              round(games.jags$BUGSoutput$summary[1:20, "50%"], 3),
+                              round(games.jags$BUGSoutput$summary[1:20, "97.5%"], 3)))
+names(dt.att) <- c("mean", "2.5%", "50%", "97.5%")
+row.names(dt.att) <- teams
+
+# Table
+dt.att %>%
+  tibble::rownames_to_column("Teams") %>% 
+  gt() %>% 
+  gt_theme_espn() %>%
+  tab_header(title = "Attacking effects of Serie A teams 2021-2022")
+
+# defense effect
+dt.def <- as.data.frame(cbind(round(games.jags$BUGSoutput$summary[21:40, "mean"], 3),
+                              round(games.jags$BUGSoutput$summary[21:40, "2.5%"], 3),
+                              round(games.jags$BUGSoutput$summary[21:40, "50%"], 3),
+                              round(games.jags$BUGSoutput$summary[21:40, "97.5%"], 3)))
+names(dt.def) <- c("mean", "2.5%", "50%", "97.5%")
+row.names(dt.def) <- teams
+
+# Table
+dt.def %>%
+  tibble::rownames_to_column("Teams") %>% 
+  gt() %>% 
+  gt_theme_espn() %>%
+  tab_header(title = "Defence effects of Serie A teams 2021-2022")
+```
+
+From these tables, we can draw some interesting considerations. Looking at the *attacking effects*, we noticed that Inter, Lazio, Napoli and Milan are the clubs with the greatest propensity to attack and score goals. This is true, these clubs scored the most goals during the season. While clubs like Genoa, Salernitana, Venezia and Cagliari have the least propensity to attack. This makes sense, because these were the last 4 teams in the final standings of the season.
+
+If we look at the *defence effects*, we can draw similar conclusions. Salernitana, Spezia, Empoli and Venezia are the teams with the highest propensity to concede goals, so they are not strong defences; while Milan, Napoli, Inter and Juventus have the lowest values. This confirms the tradition that in Italy it is important to have very good defences, in fact these were the top 4 teams in the final standings.
+
+It is interesting to have a look at the *home* parameter.
+
+```{r, echo = F, out.width="85%", out.height="50%", fig.align='center'}
+# Set a color scheme
+color_scheme_set("viridis")
+mcmc_combo(games.jags$BUGSoutput$sims.array, pars = c("home"))
+```
+
+It can be seen that the home effect is clearly positive and its mean is 0.326. This means that in the 2021-2022 Serie A, the home team had a small advantage over its opponent. 
+
+From now on, we will only consider the parameters of the top 4 clubs.
+
+```{r, echo = F}
+# Some useful vectors for the analysis
+team_effects <- c("att[11]", "def[11]", "att[8]", "def[8]", 
+                  "att[12]", "def[12]", "att[9]", "def[9]")
+team_codes <- c(11, 8, 12, 9)
+team_names <- c('Milan', 'Inter', 'Napoli', 'Juventus')
+team_array <- c('Milan', 'Milan', 'Inter', 'Inter', 'Napoli', 'Napoli', 'Juventus', 'Juventus')
+# Vector for the different titles
+title <- c('attack', 'defense', 'attack', 'defense', 'attack', 'defense', 'attack', 'defense')
+```
+
+First, we can look at some basic visualizations, such as the density plots and traceplots.
+
+```{r, echo = F, out.width="85%", fig.align='center'}
+# Basic visualizations
+chain <- games.jags$BUGSoutput$sims.array
+mcmc_combo(chain, pars = c("att[11]", "def[11]"))
+mcmc_combo(chain, pars = c("att[8]", "def[8]"))
+mcmc_combo(chain, pars = c("att[12]", "def[12]"))
+mcmc_combo(chain, pars = c("att[9]", "def[9]"))
+```
+
+As we can see, the results seem to be acceptable, the history of the chains is what we should see, fluctuations and apparantely no correlation between the samples. Furthermore, all eight parameters have a normal distribution, as expected. However, let us take a closer look at the autocorrelation of the process:
+
+```{r, echo = F, out.width="85%", fig.align='center'}
+# Autocorrelations
+par(mfrow=c(2,2))
+for(i in 1:8){
+  acf(chain[, 1, team_effects[i]], 
+      main = paste0("ACF for ", team_array[i], "\n", title[i], " effect"))
+}
+par(mfrow=c(1,1))
+```
+
+All these autocorrelations goes to zero with an acceptable lag. In general, one notices slightly worse behaviour from defence effects, which require more lag to keep the autocorrelation low.
+
+\subsubsection{3.1.1 Approximation Error}
+
+We now want to calculate the approximation error of the parameters as the square root of:
+\begin{eqnarray*}
+\mathbb{V}[\hat{I}_t] = \frac{\mathbb{V}_\pi[h(\theta_i)]}{t_{\text{eff}}}
+\end{eqnarray*}
+where $\mathbb{V}_\pi[h(\theta_i)]$ is the variance of the parameter values during the chain and $t_{\text{eff}}$ is the effective sample size (ESS). It is used to have a sort of exchange rate between dependent and independent samples, to show how much independent sample a given MCMC can correspond to. We can calculate it using the *effectiveSize* function of the *coda* package.
+
+```{r, echo = F}
+# Lists of attack and defense effects
+att.list <- games.jags$BUGSoutput$sims.list$att
+def.list <- games.jags$BUGSoutput$sims.list$def
+```
+
+```{r}
+# Initialize the approximation error matrix
+app.err <- matrix(nrow = 4, ncol = 2)
+for (i in 1:4) {
+  # Attack effect
+  app.err[i,1] = round(sqrt(var(att.list[,team_codes[i]])/effectiveSize(att.list[,team_codes[i]])), 5)
+  # Defense effect
+  app.err[i,2] = round(sqrt(var(def.list[,team_codes[i]])/effectiveSize(def.list[,team_codes[i]])), 5)
+}
+```
+
+```{r, echo = F}
+# Prepare the table
+app.err <- as.data.frame(app.err)
+row.names(app.err) <- team_names
+names(app.err) <- c("Attack", "Defense")
+
+# Plot
+app.err %>%
+  tibble::rownames_to_column("Teams") %>% 
+  gt() %>% 
+  gt_theme_espn() %>%
+  tab_header(title = "Approximation error")
+```
+
+As expected, the higher the approximation error, the slower the decrease of the ACF, in fact, it can be observed that defence effects always have higher values than attack effects. In particular, the uncertainty of Napoli's defence effect is the highest.
+
+\subsubsection{3.1.2 Empirical Mean Behaviour}
+
+We can evaluate the behaviour of the empirical average by observing the evolution of $\hat{I}_t$ for each chosen parameter and for each chain.
+The behaviour of the empirical averages is evaluted as follows, with
+increasing $t=1,…,T$ and $T$ is the total number of simulations.
+\begin{eqnarray*}
+\hat{I}_t=\frac{1}{t}\sum_{i=1}^th(\theta_i)
+\end{eqnarray*}
+where $\theta_i$ represents the chosen parameter.
+
+The idea is very simple, if the chain has almost reached stationarity, we should not see large fluctuactions around the final real value.
+
+```{r, echo = F, out.width="85%", fig.align='center'}
+# Plot
+par(mfrow=c(2,2))
+
+for(i in 1:8){
+  # First chain
+  plot(cumsum(chain[, 1, team_effects[i]]) / seq(1, length(chain[, 1, team_effects[i]])),
+   type = 'l', ylab = '', 
+   main = paste0("Empirical average behaviour of \n", team_array[i], " ", title[i], " effect"), 
+   lwd = 2, col = 'yellow')
+  # Second chain
+  points(cumsum(chain[, 2, team_effects[i]]) / seq(1, length(chain[, 2, team_effects[i]])),
+       type='l', lwd = 2, col = 'blue')
+  # Third chain
+  points(cumsum(chain[, 3, team_effects[i]]) / seq(1, length(chain[, 3, team_effects[i]])),
+       type='l', lwd = 2, col = 'green')
+}
+
+par(mfrow=c(1,1))
+```
+
+Graphically, we can assess that the process from a certain point onwards will be stationary and that the chains agree on the final result almost all the time. In particular, the chains of the Napoli defence effect appear not to converge to the same result at each chain. This result reflects the value of uncertainty assessed in the previous analysis. 
+
+\subsubsection{3.1.3 Posterior Uncertainty}
+
+We measure uncertainty using the variability of the parameter with respect to its absolute expectation.
+\begin{eqnarray*}
+U_i=\frac{\mathbb{V}[\hat{\theta}_i]^{1/2}}{|\mathbb{E}[\hat{\theta}_i]|}
+\end{eqnarray*}
+Of course, we can use the plug-in estimators (empirical sd and expectation) provided by the chains:
+
+```{r}
+# Posterior uncertainty
+post.unc <- matrix(nrow = 4, ncol = 2)
+for (i in 1:4) {
+  # Expected values
+  mu.sim.att = mean(att.list[,team_codes[i]])
+  mu.sim.def = mean(def.list[,team_codes[i]])
+  # Attack effect
+  post.unc[i,1] = round(sqrt(var(att.list[,team_codes[i]])) / abs(mu.sim.att), 5)
+  # Defense effect
+  post.unc[i,2] = round(sqrt(var(def.list[,team_codes[i]])) / abs(mu.sim.def), 5)
+}
+```
+
+```{r, echo = F}
+# Prepare the table
+post.unc <- as.data.frame(post.unc)
+row.names(post.unc) <- team_names
+names(post.unc) <- c("Attack", "Defense")
+
+# Plot
+post.unc %>%
+  tibble::rownames_to_column("Teams") %>% 
+  gt() %>% 
+  gt_theme_espn() %>%
+  tab_header(title = "Posterior uncertainty")
+```
+
+The highest posterior uncertainty is registered by the effect of Juventus' attack.
+
+\subsubsection{3.1.4 Parameters Correlation}
+
+To see the correlation between the chosen parameters, we can calculate the empirical covariance matrix using the chains and take the *corrplot*. In this case, we are looking for a linear correlation.
+
+```{r, echo = F, message = F}
+library(corrplot)
+
+# Data frame of the effects
+sim <- as.data.frame(cbind(games.jags$BUGSoutput$sims.array[, 1, "att[11]"],
+                           games.jags$BUGSoutput$sims.array[, 1, "def[11]"],
+                           games.jags$BUGSoutput$sims.array[, 1, "att[8]"],
+                           games.jags$BUGSoutput$sims.array[, 1, "def[8]"],
+                           games.jags$BUGSoutput$sims.array[, 1, "att[12]"],
+                           games.jags$BUGSoutput$sims.array[, 1, "def[12]"],
+                           games.jags$BUGSoutput$sims.array[, 1, "att[9]"],
+                           games.jags$BUGSoutput$sims.array[, 1, "def[9]"]))
+names(sim) <- team_effects
+
+# Corrplot
+c <- cor(sim)
+corrplot(c, addCoef.col = 'lightgrey', tl.pos = 'd',
+         cl.pos = 'n', col = COL2('PuOr')) 
+```
+
+We observe that the team-specific effects are not correlated at all; we can expect this result because these effects are not correlated with each other but only relate to team performance.
+
+\subsection{3.2 Predictions}
+
+We can compare the data of the real 2021-2022 Serie A with a simulated Serie A based on the values of the obtained model. Therefore, we decided to simulate each match of the competition taking into account all previously evaluated effects to predict the goals scored by each team during a given match.
+
+Based on the simulated result of each match, we decided to award a win if one team scores 1 goal more than the opponent, otherwise it will be a draw. As for the real competition, for each match we awarded 3 points to the winner, 1 point to both teams in case of a draw and 0 points to the loser.
+
+```{r, echo = F}
+# Store the values for the home parameter and for the effect of each team
+home <- games.jags$BUGSoutpu$summary[, "mean"]["home"]
+att <- rep(NA, 20)
+def <- rep(NA, 20)
+for(i in 1:20){
+  att[i] <- games.jags$BUGSoutpu$summary[, "mean"][paste0("att[",i,"]")]
+  def[i] <- games.jags$BUGSoutpu$summary[, "mean"][paste0("def[",i,"]")]
+}
+
+# Using the means of the parameter evaluate the goals scored in each match by each team
+theta <- matrix(nrow=380, ncol=2)
+for(i in 1:380){
+  theta[i,1] <- exp(home + att[games$h.g[i]] + def[games$a.g[i]])
+  theta[i,2] <- exp(att[games$a.g[i]] + def[games$h.g[i]])
+}
+
+# Create the results data frame
+results <- as.data.frame(cbind(games$h.g, games$a.g, theta, seq(1:380)))
+names(results) <- c('h.g', 'a.g', 'y1', 'y2', 'g')
+results$points1 <- 0
+results$points2 <- 0
+results$diff <- results$y1 - results$y2
+
+# Assign the right amount of points to the team according to the result of the match
+# Consider a match won only if the difference of predicted goals scored is greater than 1
+for(i in 1:380){
+  # 3 points for a win
+  if(results$diff[i] >= 1){
+    results[i,6] <- 3
+    results[i,7] <- 0
+  }
+  # 1 point for a draw
+  if(results$diff[i] < 1 & results$diff[i] > -1){
+    results[i,6] <- 1
+    results[i,7] <- 1
+  }
+  # 0 point for a loss
+  if(results$diff[i] <= -1){
+    results[i,6] <- 0
+    results[i,7] <- 3
+  }
+}
+
+# Create the final standing for the simulated season
+final_standing <- matrix(nrow=20, ncol=3)
+for(i in 1:20){
+  # Sum of the obtained points
+  final_standing[i,1] <- sum(results[results$h.g == i,]$points1) + 
+    sum(results[results$a.g == i,]$points2)
+  # Sum of the goal scored
+  final_standing[i,2] <- round(sum(results[results$h.g == i,]$y1) +
+    sum(results[results$a.g == i,]$y2))
+  # Sum of the goal conceded
+  final_standing[i,3] <- round(sum(results[results$h.g == i,]$y2) +
+    sum(results[results$a.g == i,]$y1))  
+}
+```
+
+Finally, we are able to calculate a final standings with total points collected, total goals scored and conceded.
+
+```{r, echo = F, figures-side, fig.show="hold"}
+# Create the table
+final_standing <- as.data.frame(final_standing)
+row.names(final_standing) <- teams
+names(final_standing) <- c('Points', 'Goal Scored', 'Goal Conceded')
+
+
+# Table
+final_standing[order(-final_standing$Points),] %>%
+  tibble::rownames_to_column("Teams") %>% 
+  gt() %>% 
+  gt_theme_espn() %>%
+  tab_header(title = "Simulated Serie A 2021-2022")
+
+# Real Serie A 2021-2022
+serie.A <- read.csv('data/serieA2122.csv')
+names(serie.A) <- c('Teams', 'Points', 'Goal Scored', 'Goal Conceded')
+
+serie.A %>%
+  gt() %>% 
+  gt_theme_espn() %>%
+  tab_header(title = "Real Serie A 2021-2022")
+```
+
+There are definitely differences between the real and simulated final standings, starting with the winner. In the simulated Serie A, Inter won, while in the real one Milan won. However, the overall league situation is respected and the differences between the top and bottom teams are obvious. 
+
+This model is based only on the goals scored by the teams, which is why the final ranking of the simulated Serie A follows the ranking of the best goal difference in the real one. In fact, if we order the teams according to goals scored, the two rankings will coincide.
+
+\subsection{3.3 Bayesian Inference}
+
+We can make a Bayesian inference on the goals scored during the season, using the results of our first evaluated model. We can divide between goals scored at home and goals scored away, just as we did in our model. In the end, we can compare the estimates with the actual distributions of goals scored.
+
+```{r, echo = F}
+# Poissons
+Y <- matrix(nrow=380, ncol=2)
+for(i in 1:380){
+  Y[i,1] <- round(mean(rpois(10000, theta[i,1])))
+  Y[i,2] <- round(mean(rpois(10000, theta[i,2])))
+}
+
+# Plots
+l1 <- length(table(Y[,1]))-1
+l2 <- length(table(Y[,2]))-1
+
+par(mfrow=c(1, 2))
+# Home
+plot(prop.table(table(games$Yg1)), lwd = 10, ylim=c(0, 1), ylab = '', xlab = 'Goals',
+     main = 'Goals scored at home', col = 'darkorange')
+grid(col = 'darkorange')
+points(1:3, prop.table(table(Y[,1])), pch = 21, bg = 'blue', cex = 1.5)
+legend('topright', legend = c('True distribution', 'Poisson model'),
+       pch = 21, pt.bg = c('darkorange', 'blue'), cex = 0.75)
+# Away
+plot(prop.table(table(games$Yg2)), lwd = 10, ylim=c(0, 1), ylab = '', xlab = 'Goals',
+     main = 'Goals scored away', col = 'dodgerblue')
+grid(col = 'dodgerblue')
+points(0:l2, prop.table(table(Y[,2])), pch = 21, bg = 'blue', cex = 1.5)
+legend('topright', legend = c('True distribution', 'Poisson model'),
+       pch = 21, pt.bg = c('dodgerblue', 'blue'), cex = 0.75)
+par(mfrow=c(1,1))
+```
+
+It can be seen that the predictions of goals scored are more concentrated around low scores and never predict matches with a high number of goals scored by a team. Interestingly, in the model, the home team always scores at least 1 goal in the match, which can be interpreted as the effect of the previously described home parameter. As for away goals scored, the distribution is really concentrated around 1 goal and no team in any match scores more than 2 away goals. Ultimately, the advantage of the home team is also confirmed by the model, but it cannot predict the outliers of the distribution.
+
+\section{4. Alternative Model}
+
+As an alternative model, we decided to model the number of goals scored as Negative Binomials, but not to consider the home effect. The Negative Binomial also allows us to consider the case where the data are said to be overdispersed, i.e. when the variance exceeds the mean. Overdispersion is expected for events where the first occurrence makes a second occurrence more likely, even if still random. In this case, we need further reparametrization to obtain an appropriate form, which we performed following the article by Derpanopoulos (2016). 
+\begin{eqnarray*}
+Y_{g1} &\sim& \text{NegBin}(p_{g1}, r) \\
+Y_{g2} &\sim& \text{NegBin}(p_{g2}, r)
+\end{eqnarray*}
+The NB densities are parametrized for the $g$-th match with $p_{g}$ and $r$. 
+The parameters $p_{g1}$ and $p_{g2}$ are the success parameters and for each match are defined as:
+\begin{eqnarray*}
+p_{g1} &=& \frac{r}{r+\lambda_{g1}} \\
+p_{g2} &=& \frac{r}{r+\lambda_{g2}}
+\end{eqnarray*}
+Thus, $\lambda_{g1}$ and $\lambda_{g2}$ are modeled as before, assuming a log-linear random effects model. In this case, we have an additional parameter $r$ which is the size parameter, the target for number of successful trials. It is assumed to be uniform over a wide interval.
+\begin{eqnarray*}
+r \sim \text{Unif}(0, 50)
+\end{eqnarray*}
+All other parameters, hyper-parameters and the prior distribution remain unchanged. The model implemented in JAGS is as follows:
+
+``` jags
+model{
+    # Likelihoods
+    for (g in 1:Ngames) {
+      Y1[g] ~ dnegbin(p[g,1],r)
+      Y2[g] ~ dnegbin(p[g,2],r)
+      
+      # Success parameters
+      p[g,1] <- r/(r+lambda[g,1])
+      p[g,2] <- r/(r+lambda[g,2])
+      
+      # Log-linear model
+      log(lambda[g,1]) <- att[hometeam[g]] + def[awayteam[g]]
+      log(lambda[g,2]) <- att[awayteam[g]] + def[hometeam[g]]
+    }
+  
+  # Size parameter
+  r ~ dunif(0, 50)
+  
+  # Team-specific effects
+  for (t in 1:Nteams) {
+    att.star[t] ~ dnorm(mu.att, tau.att)
+    def.star[t] ~ dnorm(mu.def, tau.def)
+    # Zero-sum constraints
+    att[t] <- att.star[t] - mean(att.star[])
+    def[t] <- def.star[t] - mean(def.star[])
+  }
+
+  # Hyper parameters priors
+  mu.att ~ dnorm(0, 0.0001)
+  mu.def ~ dnorm(0, 0.0001)
+  tau.att ~ dgamma(0.01, 0.01)
+  tau.def ~ dgamma(0.01, 0.01)
+}
+```
+
+\subsection{4.1 RJags}
+
+Using the same data and parameter vector as before, we can run our new model with *R2Jags*.
+
+```{r, warning = F}
+set.seed(1999) # seed for reproducibility
+
+# Parameter vector 
+param2 <- c('att', 'def')
+
+# Run the model with jags
+games.jags2 <- jags(data = games.data, 
+                    parameters.to.save = param2,
+                    model.file = 'model_2.txt',
+                    n.iter = 2000, n.chains = 3)
+```
+
+We can visualize the results of team-specific effects with two tables.
+
+```{r, echo=F, fig.show="hold"}
+# attack effect
+dt.att.2 <- as.data.frame(cbind(round(games.jags2$BUGSoutput$summary[1:20, "mean"], 3),
+                                round(games.jags2$BUGSoutput$summary[1:20, "2.5%"], 3),
+                                round(games.jags2$BUGSoutput$summary[1:20, "50%"], 3),
+                                round(games.jags2$BUGSoutput$summary[1:20, "97.5%"], 3)))
+names(dt.att.2) <- c("mean", "2.5%", "50%", "97.5%")
+row.names(dt.att.2) <- teams
+
+# Table
+dt.att.2 %>%
+  tibble::rownames_to_column("Teams") %>% 
+  gt() %>% 
+  gt_theme_espn() %>%
+  tab_header(title = "Attack effects of Serie A teams 2021-2022 (NegBin)")
+
+# defense effect
+dt.def.2 <- as.data.frame(cbind(round(games.jags2$BUGSoutput$summary[21:40, "mean"], 3),
+                                round(games.jags2$BUGSoutput$summary[21:40, "2.5%"], 3),
+                                round(games.jags2$BUGSoutput$summary[21:40, "50%"], 3),
+                                round(games.jags2$BUGSoutput$summary[21:40, "97.5%"], 3)))
+names(dt.def.2) <- c("mean", "2.5%", "50%", "97.5%")
+row.names(dt.def.2) <- teams
+
+# Table
+dt.def.2 %>%
+  tibble::rownames_to_column("Teams") %>% 
+  gt() %>% 
+  gt_theme_espn() %>%
+  tab_header(title = "Defense effects of Serie A teams 2021-2022 (NegBin)")
+```
+
+Regarding the attack effects, we noticed that we have more or less the same ranking as the previous model, but the effects are strengthened for all teams. Also for defence effects we have in general stronger values. The positive effects are now higher and the negative effects lower. These increased values are probably due to the lack of the home effect.
+
+Let us look some basic visualization such as density plots and traceplots for this new model, focusing only on the effects of the 4 top Serie A teams: Milan, Inter, Napoli and Juventus.
+
+```{r, echo = F, out.width="85%", fig.align='center'}
+# Basic visualizations
+chain2 <- games.jags2$BUGSoutput$sims.array
+
+# Set a color scheme
+color_scheme_set("viridis")
+
+mcmc_combo(chain2, pars = c("att[11]", "def[11]"))
+mcmc_combo(chain2, pars = c("att[8]", "def[8]"))
+mcmc_combo(chain2, pars = c("att[12]", "def[12]"))
+mcmc_combo(chain2, pars = c("att[9]", "def[9]"))
+```
+
+Again, the results seem to be acceptable, we apparently have no correlation between the samples and there are the expected fluctuactions in the history of the chains. Let us take a look at the autocorrelations of the process:
+
+```{r, echo = F, out.width="85%", fig.align='center'}
+# Autocorrelations
+par(mfrow=c(2,2))
+for(i in 1:8){
+  acf(chain2[, 1, team_effects[i]], 
+      main = paste0("ACF for ", team_array[i], "\n", title[i], " effect"))
+}
+par(mfrow=c(1,1))
+```
+
+All these autocorrelations goes to zero with an acceptable lag. In general, the slightly worse behaviour of defence effects, which require more lag to keep the autocorrelation low, is confirmed.
+
+\subsection{4.2 Comparison methods}
+
+To compare our two models, we can use two Penalized Likelihood Criteria: Deviance Information Criterion (DIC) and Akaike Information Criterion (AIC). Both are based on deviance, which can be calculated as $D(y,\theta)=-2\log{f(y|\theta)}$, but is often evaluated at a "representative point" such as the posterior mean or mode: $D_{\hat{\theta}}(y)=D(y,\hat{\theta}(y))$.
+
+Let us now compare the two models using the *DIC*. The idea is that models with smaller DIC are preferred to those with higher DIC. The Deviance Information Criterion is calculated as follows:
+\begin{eqnarray*}
+\text{DIC}=D_{\hat{\theta}}(y)+2p_D
+\end{eqnarray*}
+where $p_D$ represents the effective number of parameters used and serves to penalize model complexity and $D_{\hat{\theta}}(y)$ is the deviance of the model. Obviously, DIC can only be used as a comparative index between models evaluated on the same dataset, it has no absolute meaning.
+
+```{r, echo = F}
+# Array of models
+models <- c('Model 1: Poisson', 'Model 2: NegBin')
+
+# DIC df
+dic <- as.data.frame(rbind(round(games.jags$BUGSoutput$DIC, 3),
+                           round(games.jags2$BUGSoutput$DIC, 3)))
+names(dic) <- 'DIC'
+row.names(dic) <- models
+
+# Show table
+dic %>%
+  tibble::rownames_to_column("Models") %>% 
+  gt() %>% 
+  gt_theme_espn() %>%
+  tab_header(title = "Deviance Information Criterion - DIC")
+```
+
+The difference between the two models allows us to state that the first model is preferable, as the DIC of the first model appears to be lower. Moreover, the Poisson model contains fewer parameters than the Negative Binomial model.
+
+We can try to make the same comparison using the *AIC*. Again, the idea is to select the model with the lowest value. This method is often used in frequentist analysis and focuses on models that have good "out-of-sample" predictive ability. It is calculated as:
+\begin{eqnarray*}
+\text{AIC}=D_{\hat{\theta}}(y)+2p
+\end{eqnarray*}
+where $D_{\hat{\theta}}(y)$ is the deviance of the model and $p$ represents the dimension of the parameter space. Again, the aim is to penalize model complexity.
+
+```{r, echo = F}
+# Deviances
+deviance.1 <- games.jags$BUGSoutput$summary["deviance", "mean"]
+deviance.2 <- games.jags2$BUGSoutput$summary["deviance", "mean"]
+
+# AICs
+aic.1 <- deviance.1 + 2*(length(games.jags$BUGSoutput$summary[, "mean"])-1)
+aic.2 <- deviance.2 + 2*(length(games.jags2$BUGSoutput$summary[, "mean"])-1)
+
+# AIC df
+aic <- as.data.frame(rbind(round(aic.1, 3),
+                           round(aic.2, 3)))
+names(aic) <- 'AIC'
+row.names(aic) <- models
+
+# Show table
+aic %>%
+  tibble::rownames_to_column("Models") %>% 
+  gt() %>% 
+  gt_theme_espn() %>%
+  tab_header(title = "Akaike Information Criterion - AIC")
+```
+
+We get the same results as before, the Poisson model has the lowest value. One difference between the two models was the presence of the home effect: looking at these results, it seems better to include it into the model. 
+
+\subsection{4.3 Alternative predictions}
+
+We can try to simulate the Serie A season with the Negative Binomial model, to see if there are any relevant differences with the previous simulated season and the real one. This is the final standings obtained:
+
+```{r, echo = F}
+# Store the values for the home parameter and for the effect of each team
+#home2 <- games.jags2$BUGSoutpu$summary[, "mean"]["home"]
+att2 <- rep(NA, 20)
+def2 <- rep(NA, 20)
+for(i in 1:20){
+  att2[i] <- games.jags2$BUGSoutpu$summary[, "mean"][paste0("att[",i,"]")]
+  def2[i] <- games.jags2$BUGSoutpu$summary[, "mean"][paste0("def[",i,"]")]
+}
+
+# Using the means of the parameter evaluate the goals scored in each match by each team
+theta2 <- matrix(nrow=380, ncol=2)
+for(i in 1:380){
+  theta2[i,1] <- exp(att2[games$h.g[i]] + def2[games$a.g[i]])
+  theta2[i,2] <- exp(att2[games$a.g[i]] + def2[games$h.g[i]])
+}
+
+# Create the results data frame
+results2 <- as.data.frame(cbind(games$h.g, games$a.g, theta2))
+names(results2) <- c('h.g', 'a.g', 'y1', 'y2')
+results2$points1 <- 0
+results2$points2 <- 0
+results2$diff <- results2$y1 - results2$y2
+
+# Assign the right amount of points to the team according to the result of the match
+# Consider a match won only if the difference of predicted goals scored is greater than 1
+for(i in 1:380){
+  # 3 points for a win
+  if(results2$diff[i] >= 1){
+    results2[i,5] <- 3
+    results2[i,6] <- 0
+  }
+  # 1 point for a draw
+  if(results2$diff[i] < 1 & results2$diff[i] > -1){
+    results2[i,5] <- 1
+    results2[i,6] <- 1
+  }
+  # 0 point for a loss
+  if(results2$diff[i] <= -1){
+    results2[i,5] <- 0
+    results2[i,6] <- 3
+  }
+}
+
+# Create the final standing for the simulated season
+final_standing2 <- matrix(nrow=20, ncol=3)
+for(i in 1:20){
+  # Sum of the obtained points
+  final_standing2[i,1] <- sum(results2[results2$h.g == i,]$points1) + 
+    sum(results2[results2$a.g == i,]$points2)
+  # Sum of the goal scored
+  final_standing2[i,2] <- round(sum(results2[results2$h.g == i,]$y1) +
+    sum(results2[results2$a.g == i,]$y2))
+  # Sum of the goal conceded
+  final_standing2[i,3] <- round(sum(results2[results2$h.g == i,]$y2) +
+    sum(results2[results2$a.g == i,]$y1))  
+}
+
+# Create the table
+final_standing2 <- as.data.frame(final_standing2)
+row.names(final_standing2) <- teams
+names(final_standing2) <- c('Points', 'Goal Scored', 'Goal Conceded')
+
+
+# Table
+final_standing2[order(-final_standing2$Points),] %>%
+  tibble::rownames_to_column("Teams") %>% 
+  gt() %>% 
+  gt_theme_espn() %>%
+  tab_header(title = "Simulated Serie A 2021-2022 (NegBin)")
+```
+
+As can be seen, the shape of this Serie A simulation is very similar to the previous one. As expected from the two DIC measures, the two models are very close to each other. Both points and goals are almost the same as before, some differences in the points obtained are not significant in the final standings because the order remains more or less the same.
+
+\subsection{4.4 Bayesian Inference}
+
+We can make some Bayesian inference as before and compare the results with those obtained previously.
+
+```{r, echo = F}
+r <- mean(runif(10000, 0, 50))
+
+# NegBins
+Y2 <- matrix(nrow=380, ncol=2)
+for(i in 1:380){
+  Y2[i,1] <- round(mean(rnbinom(10000, size = r, prob = r /(r + theta2[i,1]))))
+  Y2[i,2] <- round(mean(rnbinom(10000, size = r, prob = r /(r + theta2[i,2]))))
+}
+
+# Plots
+l12 <- length(table(Y2[,1]))-1
+l22 <- length(table(Y2[,2]))-1
+
+par(mfrow=c(1, 2))
+# Home
+plot(prop.table(table(games$Yg1)), lwd = 10, ylim=c(0, 1), ylab = '', xlab = 'Goals',
+     main = 'Goals scored at home', col = 'darkorange')
+grid(col = 'darkorange')
+points(1:3, prop.table(table(Y[,1])), pch = 21, bg = 'blue', cex = 1.5)
+points(0:l12, prop.table(table(Y2[,1])), pch = 22, bg = 'red', cex = 1.5)
+legend('topright', legend = c('True distribution', 'Poisson model', 'NegBin model'),
+       pch = c(21, 21, 22), pt.bg = c('darkorange', 'blue', 'red'), cex = 0.75)
+# Away
+plot(prop.table(table(games$Yg2)), lwd = 10, ylim=c(0, 1), ylab = '', xlab = 'Goals',
+     main = 'Goals scored away', col = 'dodgerblue')
+grid(col = 'dodgerblue')
+points(0:l2, prop.table(table(Y[,2])), pch = 21, bg = 'blue', cex = 1.5)
+points(0:l22, prop.table(table(Y2[,2])), pch = 22, bg = 'red', cex = 1.5)
+legend('topright', legend = c('True distribution', 'Poisson model', 'NegBin model'),
+       pch = c(21, 21, 22), pt.bg = c('dodgerblue', 'blue', 'red'), cex = 0.75)
+par(mfrow=c(1,1))
+```
+
+Comparing the two models, it is immediately noticeable that the Negative Binomial model has almost the same shape both at home and away, so the "natural" difference between the two distributions is missing. For away goals scored, the predictions are very close to Poisson's. This is interesting because it gives us an idea of the real relevance of the 'home' effect in these models.
+
+\section{5. Frequentist Analysis}
+
+We can propose a frequentist alternative to our Bayesian analysis. We can consider the fact that goals scored are expressed in the form of a log-linear model with respect to some specific effects. Then, we organize in a new dataframe the home effect, the team-specific effects and the goals scored in each game of the season, in order to train a *Generalized Linear Model* to predict the number of goals scored.
+
+```{r, echo = F}
+# Home factor
+h <- rnorm(380, mean = home, sd = 0.0001)
+
+# Home-team effects
+ah <- rep(NA, 380)
+dh <- rep(NA, 380)
+for(i in 1:380){
+  ah[i] <- att[games$h.g[i]]
+  dh[i] <- def[games$a.g[i]]
+}
+
+# Away-team effects
+aa <- rep(NA, 380)
+da <- rep(NA, 380)
+for(i in 1:380){
+  aa[i] <- att[games$a.g[i]]
+  da[i] <- def[games$h.g[i]]
+}
+
+# Dataframe creation
+df <- data.frame(cbind(games$h.g, games$a.g, games$Yg1, games$Yg2,
+                       ah, dh, aa, da, h))
+names(df) <- c('h.g', 'a.g', 'Yg1', 'Yg2', 'att.h', 'def.a', 'att.a', 'def.h', 'h')
+row.names(df) <- seq(1:380)
+```
+
+In particular, we considered a *glm* with a Poisson function as the distribution family and a *log*-link function. In this way, the mean function is of the form $\mu = \exp(X\beta)$, which corresponds exactly to the specified form of our original model.
+
+This is the model for goals scored at home:
+
+```{r}
+model.h <- glm(Yg1 ~ h + att.h + def.a, family=poisson(link="log"), data=df)
+```
+
+This is the model for goals scored away:
+
+```{r}
+model.a <- glm(Yg2 ~ att.a + def.h, family=poisson(link="log"), data=df)
+```
+
+Finally, we can compare the predictions of the fitted values of goals scored with the predictions obtained in the Bayesian framework.
+
+```{r, echo = F}
+# Fitted values
+fit.h <- prop.table(table(round(fitted(model.h))))
+fit.a <- prop.table(table(round(fitted(model.a))))
+  
+l13 <- length(fit.h)-1
+l23 <- length(fit.a)-1
+
+# Plots
+par(mfrow=c(1, 2))
+# Home
+plot(prop.table(table(games$Yg1)), lwd = 10, ylim=c(0, 1), ylab = '', xlab = 'Goals',
+     main = 'Goals scored at home', col = 'darkorange')
+grid(col = 'darkorange')
+points(1:3, prop.table(table(Y[,1])), pch = 21, bg = 'blue', cex = 1.5)
+points(0:l12, prop.table(table(Y2[,1])), pch = 22, bg = 'red', cex = 1.5)
+points(1:3, fit.h, pch = 24, bg = 'green', cex = 1.5)
+legend('topright', legend = c('True distribution', 'Poisson model', 
+                              'NegBin model', 'Frequentist'),
+       pch = c(21, 21, 22, 24), pt.bg = c('darkorange', 'blue', 'red', 'green'), cex = 0.7)
+# Away
+plot(prop.table(table(games$Yg2)), lwd = 10, ylim=c(0, 1), ylab = '', xlab = 'Goals',
+     main = 'Goals scored away', col = 'dodgerblue')
+grid(col = 'dodgerblue')
+points(0:l2, prop.table(table(Y[,2])), pch = 21, bg = 'blue', cex = 1.5)
+points(0:l22, prop.table(table(Y2[,2])), pch = 22, bg = 'red', cex = 1.5)
+points(0:l23, fit.a, pch = 24, bg = 'green', cex = 1.5)
+legend('topright', legend = c('True distribution', 'Poisson model', 
+                              'NegBin model', 'Frequentist'),
+       pch = c(21, 21, 22, 24), pt.bg = c('dodgerblue', 'blue', 'red', 'green'), cex = 0.7)
+par(mfrow=c(1,1))
+```
+
+We can see that for goals scored at home, the predictions are quite similar to those of Poisson model. While for away goals scored, the resulting predictions are different: they are less concentrated than the others and the range of values is wider, there are also some matches with 3 goals scored by the away team. However, goals scored at home always seem to be more numerous than those scored away. Interestingly, there is no model that can correctly predict matches in which a team scored 4, 5 or 6 goals; it probably happened too few times in the last championship. Only the Negative Binomial model predicted some matches with zero goals for the home team (and it was the only one in which the home parameter was not considered), otherwise the models always predict at least one goal for the home team, although this was by no means always true in the actual data. 
+
+To see if these differences are relevant, we can try to simulate the season with these new data as well and see what happens.
+
+```{r, echo = F}
+# Create the results data frame
+results3 <- as.data.frame(cbind(games$h.g, games$a.g, fitted(model.h), fitted(model.a)))
+names(results3) <- c('h.g', 'a.g', 'y1', 'y2')
+results3$points1 <- 0
+results3$points2 <- 0
+results3$diff <- results3$y1 - results3$y2
+
+# Assign the right amount of points to the team according to the result of the match
+# Consider a match won only if the difference of predicted goals scored is greater than 1
+for(i in 1:380){
+  # 3 points for a win
+  if(results3$diff[i] >= 1){
+    results3[i,5] <- 3
+    results3[i,6] <- 0
+  }
+  # 1 point for a draw
+  if(results3$diff[i] < 1 & results3$diff[i] > -1){
+    results3[i,5] <- 1
+    results3[i,6] <- 1
+  }
+  # 0 point for a loss
+  if(results3$diff[i] <= -1){
+    results3[i,5] <- 0
+    results3[i,6] <- 3
+  }
+}
+
+# Create the final standing for the simulated season
+final_standing3 <- matrix(nrow=20, ncol=3)
+for(i in 1:20){
+  # Sum of the obtained points
+  final_standing3[i,1] <- sum(results3[results3$h.g == i,]$points1) + 
+    sum(results3[results3$a.g == i,]$points2)
+  # Sum of the goal scored
+  final_standing3[i,2] <- round(sum(results3[results3$h.g == i,]$y1) +
+    sum(results3[results3$a.g == i,]$y2))
+  # Sum of the goal conceded
+  final_standing3[i,3] <- round(sum(results3[results3$h.g == i,]$y2) +
+    sum(results3[results3$a.g == i,]$y1))  
+}
+
+# Create the table
+final_standing3 <- as.data.frame(final_standing3)
+row.names(final_standing3) <- teams
+names(final_standing3) <- c('Points', 'Goal Scored', 'Goal Conceded')
+
+
+# Table
+final_standing3[order(-final_standing3$Points),] %>%
+  tibble::rownames_to_column("Teams") %>% 
+  gt() %>% 
+  gt_theme_espn() %>%
+  tab_header(title = "Simulated Serie A 2021-2022 (Frequentist)")
+```
+
+As can be seen, the overall ranking is no different from the previous two. We noticed that the top teams tend to have more points and the bottom teams fewer points. The reason may be that there are fewer draws, so the difference between goals scored and goals conceded in a single match is generally higher. Perhaps this kind of approach overestimates the performance of a team with a good attack and defence, penalizing the performances of the other teams in the league too much.
+
+\section{6. Conclusions}
+
+The models presented in this project are simple applications of Bayesian hierarchical modelling. For simplicity, these predictions are based only on the number of goals scored and conceded during the entire season by each team. Of course, to obtain a more accurate model, many other variables can be included to capture the variability of the teams' form during the season (injuries, suspensions, etc.). In fact, the two predicted final standings reflect more the real "goal difference ranking" than the actual standings. In any case, the results obtained are realistic and give a clear idea of the last Serie A championship.
+
+\section{Appendix}
+
+``` sql
+-- Query used on MySQL Workbench to extract Serie A 2021-2022 data
+
+SELECT c1.pretty_name, c2.pretty_name, g.home_club_id, g.away_club_id, g.home_club_goals, 
+       g.away_club_goals, g.round
+FROM games AS g, clubs AS c1, clubs AS c2
+WHERE g.season = 2021 AND
+      g.competitions_id = 'IT1' AND
+      c1.id = g.home_club_id AND
+      c2.id = g.away_club_id
+ORDER BY g.round;
+```
+
+\section{References}
+
+Baio, G. & Blangiardo, M. (2010), 'Bayesian hierarchical model for the prediction of football results', *Journal of Applied Statistics*, 37 (2) 253-264.
+
+Derpanopoulos G. (2016), ['Count Models in JAGS'](https://georgederpa.github.io/teaching/countModels.html)
+
+Karlis, D. & Ntzoufras, I (2003), 'Analysis of sports data by using bivariate Poisson models', *Journal of the Royal Statistical Society* D 52, 381-393.
+
+Pollard R., Benjamin B., Reep C. (1977), 'Sport and the negative binomial distribution', *Optimal strategies in sport. Eds: Ladany S.P., Machol R.E.Cleveland: North-Holland Publishing Company*, 188-195.
+
+

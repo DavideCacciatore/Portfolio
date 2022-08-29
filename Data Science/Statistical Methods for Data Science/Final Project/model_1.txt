@@ -1,0 +1,23 @@
+model {
+  
+  for (g in 1:Ngames) {
+    Y1[g] ~ dpois(theta[g,1])
+    Y2[g] ~ dpois(theta[g,2])
+    log(theta[g,1]) <- home + att[hometeam[g]] + def[awayteam[g]]
+    log(theta[g,2]) <- att[awayteam[g]] + def[hometeam[g]]
+    }
+  
+  home ~ dnorm(0, 0.0001)
+  
+  for (t in 1:Nteams) {
+    att.star[t] ~ dnorm(mu.att, tau.att)
+    def.star[t] ~ dnorm(mu.def, tau.def)
+    att[t] <- att.star[t] - mean(att.star[])
+    def[t] <- def.star[t] - mean(def.star[])
+  }
+
+  mu.att ~ dnorm(0, 0.0001)
+  mu.def ~ dnorm(0, 0.0001)
+  tau.att ~ dgamma(0.01, 0.01)
+  tau.def ~ dgamma(0.01, 0.01)
+}

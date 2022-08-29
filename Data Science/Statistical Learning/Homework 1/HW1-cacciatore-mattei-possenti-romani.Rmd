@@ -1,0 +1,662 @@
+---
+title: "Homework 1"
+author: "Group 12 - Cacciatore, Mattei, Possenti, Romani"
+output: html_document
+---
+
+## **Part I: Polynomials are good..**
+
+We are working on the **WMAP** dataset, it shows differences across the sky in the temperature of the **cosmic microwave background (CMB)**. There are two variables: $y$ represents the strength of the temperature fluctuactions, called **power spectrum**, at each frequency (or multipole) $x$.
+
+We can see them in the following scatterplots.
+
+```{r, echo=FALSE}
+# Load the data
+wmap <- read.csv("wmap.csv")
+
+# Plot
+lay.mat = matrix(c(1,1,2,3), nrow = 2, byrow = T)
+layout(lay.mat)
+
+# All
+plot(wmap$x, wmap$y, pch = 21, bg = "yellow", cex = .7,
+     main = "CMB data (WMAP)", xlab = "Multipole", ylab = "Power")
+polygon(c(0,400,400,0),
+        c(min(wmap$y), min(wmap$y), max(wmap$y), max(wmap$y)),
+        border = NA, col = rgb(0,0,0,.3))
+
+# First bump
+plot(wmap$x[1:400], wmap$y[1:400], pch = 21, bg = "green", cex = .7,
+     main = "Main bump", xlab = "Multipole", ylab = "Power")
+
+# Secondary bump(s)
+plot(wmap$x[-(1:400)], wmap$y[-(1:400)], pch = 21, bg = "red", 
+     cex = .7, main = "Secondary bump(s) (?)", 
+     xlab = "Multipole", ylab = "Power")
+```
+
+The horizontal axis is the multipole moment, essentially the frequency of fluctuactions in the temperature field of the CMB. The vertical axis is the power or strength of the fluctuactions at each frequency. The top plot shows the full data set. The two bottom plots zoom in the first 400 and the next 500 data points. The first peak around $x = 200$ is obvious. But many "official" fit show also a second and a third peak further to the right.
+
+The purpose of this homework is to see if these peak are relly there or not, without further a priori info.
+
+### 1.
+
+*Briefly explain why this idea is yet another manifestation of our “be linear in transformed feature space” mantra. Do you “perceive” any technical difference with the “(orthogonal) series expansion” point of view described in our “extended” Linear Algebra notes?*
+
+The idea of capturing the non-linearity of our data in a regression model allows us to keep exploiting the simplicity of these models while providing an efficient and satisfying result. To do so, it's necessary to transform the feature space into a new "artificial" space, where the predictors we'll obtain are not necessarily linear with respect to data - but parameters will.
+
+To do so, we'll implement the idea of piecewise polynomial expansion, applying a specific family of functions/transformation to our space. We'll call our family of transformation a basis, and we'll exploit it to build the new space where our predictors will live. Furthermore, we'll use a restricted family of transformations in order to obtain an object which is flexible enough, does not overfit the data, as often polynomial models do, and provide a good approximation of the wanted true predictor - a spline.
+
+Splines are constrained piecewise functions of degree $d$ with $(d - 1)$ continuous derivatives. Each "piece" lives on its interval, defined by a start and an end point, called a knot. Furthermore, as already said, the function is built under constraints. Infact, the piecewise polynomials must be continuous at either end of a knot - such that the family of polynomials as a whole will generate a unique output for every input - and the continuity on derivatives grants the final $f(x)$ to be smooth.
+
+Starting from a feature space $X$, the first step taken to define splines is to divide the domain into bins. Bins are defined through *q knot points*. So, instead of fitting a linear model on $X$, we'll fit the following model:
+
+$$
+f(x) = \displaystyle\sum_{j=1}^{(d+1)+q} \beta_{j}g_{j}(x) \ \ \textrm{for some set of coeffs}\ \beta = [\beta_{1}, ..., \beta_{d+1}, \beta_{(d+1)+1}..., \beta_{(d+1)+q}]^{T}
+$$
+
+where $f(x) - \{d^{th}\}$ order spline with knots $\{{ξ_{1}, . . . , ξ_{q}}\}$ - can be obtained as a linear combination over the truncated power functions: 
+
+$$
+\mathscr{G_{d, q}}=\{ g_{1}(x), ..., g_{d+1}(x), g_{(d+1)+1}(x), ..., g_{(d+1)+q}(x) \}
+$$
+
+defined as 
+
+$$
+\{ g_{1} = 1, ..., g_{d+1}(x) = x^{d} \}\ \text{ and}\ \{ g_{(d+1)+j}(x) = (x - ξ_{j})_{+}^{d} \}_{j=1}^{q} \ \textrm{where} \ (x)_{+} = \textrm{max} \{0, x\}
+$$
+
+We can then think about a linear map between the natural feature space X and a transformed one, where we have the piecewise functions as linear combination of the *basis functions*:
+
+$$
+X \space \xrightarrow{\ \ \ \ g \ \ \ \ } \space [ g_{1}(x),\ g_{2}(x), \ ..., g_{d+1}(x),\ g_{(d+1)+1}(x), ..., \ g_{(d+1)+q}(x)]^{T}
+$$
+
+We obtain a new *$(d + 1) + q$ dimensional* space, built on the above mentioned basis. Then, since the final $f(x)$ is the result of a linear combination, we can say that linearity is mantained in a transformed feature space.
+
+Although the idea of expressing functions as a linear combination of the functions of a given basis is exactly what splines expansion is based on, there's a technical difference between this expansion and the general idea of orthogonal expansion. As a matter of fact, when it comes to orthogonal expansion, we're dealing with orthogonal basis functions, which is not necessarily the case when it comes to splines' polynomials.
+
+### 2. 
+
+*Plot a few elements of $G_{d,q}$ with $d \in \{1, 3\}$ and $q \in \{3, 10\}$ equispaced knots in the open interval $(0, 1)$.*
+
+First of all, we need to compute the design matrix $n \times (d+q)+1$, with generic entry:
+
+$$
+\mathbb{X}[i, j] = g_j(x_i) \textrm{ for } i \in \{1, .., n\} \textrm{ and } j \in \{1, .., d+q+1\}
+$$
+
+```{r}
+# Compute the design matrix
+
+G = function(x, d, q){
+  
+  # Input:
+  #       - x <- data
+  #       - d <- degree of the polynomial
+  #       - q <- number of equispaced knots
+  # Output:
+  #       - des_mat <- design matrix
+  
+  # Number of intervals in the data, given the number of knots
+  h = (max(x) - min(x))/(q+1)
+  # Create the design matrix with the first column of 1 and the other columns
+  # with the polynomials of the data, given the degree
+  des_mat = cbind(rep(1, length(x)), poly(x, d, raw=T))
+  
+  # Loop for each knot
+  for(i in 1:q){
+    # Place the knot equispaced (h) one from the other
+    knot = min(x) + h*i
+    
+    v = c() # Initialize an empty vector
+    
+    # Loop for all the data
+    for(j in 1:length(x)){
+      # Update the vector at each step
+      v = c(v, max(0, (x[j] - knot)**d))
+    }
+    
+    # Update the design matrix at each step
+    des_mat = cbind(des_mat, v)
+  }
+  
+  # Build a dataframe from the design matrix
+  des_mat = as.data.frame(des_mat)
+  
+  # Give names to the dataframe
+  colnames(des_mat) = 1:(d+q+1)
+  
+  return(des_mat)
+}
+```
+
+Now, we can plot the elements of the design matrix into the open interval $(0, 1)$ for the four different combinations of $d \in \{1, 3\}$ and $q \in \{3, 10\}$. 
+
+```{r}
+# Assign values to d and q
+d = c(1,3); q = c(3,10)
+```
+
+```{r, echo=FALSE}
+par(mfrow = c(2,2)) # Set graphical options
+
+# Loops for plotting
+for(j in 1:length(d)){
+  for(k in 1:length(q)){
+    # Generate the design matrix in the open interval (0,1)
+    points = G(seq(0, 1, 0.05), d[j], q[k])
+    # Empty plot
+    plot(1, type = "n", xlab = "", ylab = "", xlim = c(0, 1), 
+         ylim = c(0, 1), main = paste0('D = ', d[j], ' Q = ', q[k]))
+    for(i in 2:(d[j] + q[k] + 1)){
+      # Fill the plots with lines
+      lines(seq(0, 1, 0.05), points[, i], xlim = c(0, 1), 
+            ylim = c(0, 1), lty = 1, lwd = 2, col = 'orchid')
+    }
+  }
+}
+par(mfrow = c(1,1))
+```
+
+
+### 3.
+*Implement regression splines from scratch on the wmap data.*
+
+We implemented two functions: *spline_reg* and *spline*. The first one allows us to fit the regression spline model to the data and it give as output the coefficients and the residuals of the model. The second one allows us to plot the curve of the fitted model.
+
+```{r}
+spline_reg = function(X, d, q){
+  # Input:
+  #       - X <- data
+  #       - d <- degree of the polynomial
+  #       - q <- number of knots
+  # Output:
+  #       - coeff <- coefficients of the regression
+  #       - res   <- residuals of the regression
+  
+  # Compute the design matrix from the input data
+  g = G(X$x, d, q)
+  
+  # Fit the data to the new design matrix
+  spline_fit = lm(X$y ~., data = g)
+  
+  # Extract the coefficients
+  coeff = spline_fit$coefficients
+  
+  # Remove the second coefficient because is NA
+  coeff = coeff[-2]
+  
+  # Extract the residuals
+  res = residuals(spline_fit)
+  
+  return(list(coeff = coeff, res = res))
+}
+
+spline = function(X, coeff, d, q, range){
+  # Input:
+  #       - X     <- data
+  #       - coeff <- coefficients of the spline regression
+  #       - d     <- degree of the polynomial
+  #       - q     <- number of knots
+  #       - range <- range of the data
+  # Output:
+  #       - s <- fitted values
+  
+  # Compute the length of the interval between the knots
+  h = (range[2] - range[1])/(q+1)
+  
+  # Build the design matrix
+  des_mat = c(1, poly(X, d, raw=T))
+  
+  # Loop for each knot
+  for(i in 1:q){
+    # Place the knots at distance h and update the design matrix
+    knot = range[1] + h*i
+    supp = max(0, (X - knot)**d)
+    des_mat = c(des_mat, supp)
+  }
+  # Fitted regression spline
+  s = sum(coeff * des_mat)
+  
+  return(s)
+}
+
+# Vectorize the function
+spline = Vectorize(spline, vectorize.args = 'X')
+```
+
+We decided to implement two cross-validation technique: **KCV** (K-folds Cross Validation) and **GCV** (Generalized Cross Validation). We will use them to tune our parameters and choose the best combination of $(d, q)$, the degree of the polynomial and the number of knots.
+
+```{r}
+# K-folds Cross Validation
+KCV = function(X, d, q, K){
+  # Input:
+  #       - X <- data
+  #       - d <- degree of the polynomial
+  #       - q <- number of knots
+  #       - K <- number of folds
+  # Output:
+  #       - Best possible combination of d and q
+  
+  # Set seed for reproducibility
+  set.seed(123)
+  
+  # Assign each data point to a fold randomly
+  folds <- sample( rep(1:K, length = nrow(X)) )
+  
+  # Initialize an empty matrix where to store the result of the CV
+  mat = matrix(NA, length(d), length(q))
+  
+  # Loop for d and q
+  for(j in 1:length(d)){
+    for(k in 1:length(q)){
+      # Initialize a vector to store the MSEs of the KCV.
+      KCV = rep(NA, K)
+      
+      # Loop for each fold
+      for (i in 1:K){
+        # Leave out the data of that fold
+        # We will use them as validation set
+        data = X[which(folds != i),]
+        # Compute the design matrix of the data
+        g = G(data$x, d[j], q[k])
+        # Remove the first column of 1
+        g = g[,-1]
+        # Fit the data with the polynomials x
+        fit = lm(data$y ~ ., data = g)
+        # Consider the validation data
+        data.out = X$x[which(folds == i)]
+        # Compute the design matrix
+        g.out = G(data.out, d[j], q[k])
+        # Predict the output of the validation set
+        y.hat = predict(fit, newdata = g.out)
+        # Consider the "true" data of the validation set
+        y.out = X$y[which( folds == i )]
+        # Compute the MSE
+        KCV[i] = mean(( y.out - y.hat )^2)
+      }
+      # Store the result in the matrix
+      mat[j,k] = mean(KCV)
+    }
+  }
+  # Find what is the best combination of d and q wrt MSE
+  best = which(mat == min(mat), arr.ind = TRUE)
+  d_best = d[best[1]]; q_best = q[best[2]]
+  
+  return(list(d_best = d_best, q_best = q_best))
+}
+
+# Generalized Cross Validation
+GCV = function(X, d, q){
+  # Input:
+  #       - X <- data
+  #       - d <- degree of the polynomial
+  #       - q <- number of knots
+  # Output:
+  #       - Best combination of d and q
+  
+  # Initialize an empty matrix to store the results of the CV
+  mat = matrix(NA, length(d), length(q))
+  
+  # Loop for d and q
+  for(j in 1:length(d)){
+    for(k in 1:length(q)){
+      # Compute the design matrix of the data
+      g = G(X$x, d[j], q[k])
+      g = g[,-1]
+      # Fit the data
+      fit = lm(X$y ~ ., data = g)
+      # Store the result of the GCV in the matrix
+      mat[j,k] = (deviance(fit)/nrow(X))/((1-(d[j]+q[k]+1)/nrow(X))**2)
+    }
+  }
+  # Find the best combination of d and q
+  best = which(mat == min(mat), arr.ind = TRUE)
+  d_best = d[best[1]]; q_best = q[best[2]]
+  
+  return(list(d_best = d_best, q_best = q_best))
+}
+```
+
+Let's see what is the best combination of $(d, q)$ obtained with the *KCV* and plot the fit on the scatterplot.
+
+```{r}
+# Set d = (1, 3) and make a grid search on all the q from 2 to 30
+d = c(1,3)
+q = seq(2, 30)
+
+K = 5 # Set 5 folds
+comb.kcv = KCV(wmap, d, q, K)
+d_best = comb.kcv$d_best; q_best = comb.kcv$q_best
+c(d = d_best, q = q_best)
+```
+
+The best combination obtained with the KCV with 5 folds is $(d = 1, q = 6)$. It means that we have 6 equispaced knots and the fitted model between them is linear.
+
+```{r, echo = FALSE}
+# Get the coefficients and the residuals of the model with the given d and q
+fit = spline_reg(wmap, d_best, q_best)
+
+# Plot
+plot(wmap$x,wmap$y, xlab = 'Multipole', ylab = 'Power', 
+     main = paste0('Spline regression with d = ', d_best, ' and q = ', q_best),
+     bg = 'light blue', pch = 21)
+# Add the fit curve
+curve(spline(x, coeff = fit$coeff, d = d_best, q = q_best,
+             range = c(min(wmap$x), max(wmap$x))),
+      col = 'green', lwd = 3, add = T)
+```
+
+Looking at the output of this first fitted model, we can see a good fit in the first half of the data but not in the second one. We think that this can be an example of **underfitting**.
+
+Now, let's consider the **GCV**.
+
+```{r}
+comb.gcv = GCV(wmap, d, q)
+d_best = comb.gcv$d_best; q_best = comb.gcv$q_best
+c(d = d_best, q = q_best)
+```
+
+The best combination obtained with the GCV is $(d = 3, q = 18)$. It means that we have 18 equispaced knots and the regression between them is cubic.
+
+```{r, echo = FALSE}
+# Get the coefficients and the residuals of the model with the given d and q
+fit = spline_reg(wmap, d_best, q_best)
+
+# Plot
+plot(wmap$x,wmap$y, xlab = 'Multipole', ylab = 'Power', 
+     main = paste0('Spline regression with d = ', d_best, ' and q = ', q_best),
+     bg = 'light blue', pch = 21)
+# Add the fit curve
+curve(spline(x, coeff = fit$coeff, d = d_best, q = q_best,
+             range = c(min(wmap$x), max(wmap$x))),
+      col = 'green', lwd = 3, add = T)
+```
+
+This model seems to catch better the pattern in the data, compared with the previous one. In addition, we can see that, in the second half of the data, it seems to find some secondary bumps.
+
+### 4.
+
+*Compare the best fit we got so far with a GCV-tuned polynomial regression.*
+
+```{r}
+# Compute the polynomial regression
+
+ds = 1:25 # Degrees of the polynomial
+ps = length(ds) + 1 # Parameters of the polynomial
+
+# Polynomial function
+fun = function(d) if (d == 0) lm(y ~ 1, wmap) else lm(y ~ poly(x, degree = d), wmap)
+
+# Apply the function on all the selected degrees
+fits = lapply(ds, fun)
+
+# Compute the MSEs and the GCV
+MSEs = unlist( lapply(fits, deviance) ) / nrow(wmap)
+pol.gcv = MSEs / (1 - (ps)/nrow(wmap) )^2
+
+# Let's see what is the degree of the best polynomial fit
+degree = ds[ which.min(pol.gcv) ]; c(degree = degree)
+```
+
+The best GCV-tuned polynomial regression has degree equal to 25 as we can see in the following plot that shows the MSEs obtained with each degree from 1 to 25.
+
+```{r, echo=FALSE}
+# Plot
+plot(ds, pol.gcv, type = "b", xlab = "Degree", ylab = 'GCV',
+     pch = 16, col = 'black')
+points(x = degree, y = pol.gcv[degree], pch = 16, col = 'red')
+```
+
+```{r}
+# Fit the best polynomial regression to the data
+fit_poly = lm(y ~ poly(x, degree = degree), wmap)
+yhat <- predict(fit_poly, newdata = wmap)
+```
+
+```{r, echo=FALSE}
+# Plot
+par(mfrow = c(1,2))
+
+# Poly regression
+plot(wmap$x, wmap$y, xlab = 'Multipole', ylab = 'Power', pch = 21,
+     bg = 'light blue', main = 'Polynomial Regression')
+lines(yhat ~ wmap$x, wmap, lwd = 3, col = "red")
+
+# Spline regression
+plot(wmap$x, wmap$y, xlab = 'Multipole', ylab = 'Power', pch = 21,
+     bg = 'light blue', main = 'Spline Regression')
+curve(spline(x, coeff = fit$coeff, d = d_best, q = q_best, 
+             range = c(min(wmap$x),max(wmap$x))),
+      col = 'green', lwd = 3, add = T)
+par(mfrow = c(1,1))
+```
+
+In our opinion, the polynomial regression with degree equal to 25 results to be really **overfitting**. Anyway, even that model catch some secondary bumps in the second half of the data.
+
+Comparing these two model, we prefer the one obtained with the spline regression. It is smoother and less linked to the variability of the second half of the data. Both seems to catch some secondary bumps that can support the secondary features discovered by some "official" fit of the data.
+
+## **Part II: To be parametric or not to be..**
+
+We want to test if our parametric model (linear regression) is correct, it means that it should predict better than - or at least as well as - the non parametric one (spline regression).
+
+The null hypothesis is:
+
+$$
+H_0 = \textrm{ the parametric model is correct}
+$$
+
+The test statistic we will use is the mean squared error difference between the two models.
+
+$$
+T = MSE_p(\theta)-MSE_{np}(f)
+$$
+
+We will resort to a particular parametric bootstrap strategy.
+
+### 1.
+
+*Focus your attention on the second part of the data by dropping the first 400 observations and saving the others in a data frame called **wmap_sb**.*
+
+```{r}
+wmap_sb <- wmap[-(1:400),]
+```
+
+### 2.
+
+*Consider a simple linear model $f(x|\theta) = \theta_0 + \theta_1 \cdot x$. Fit this model and call it **lin_fit**.*
+
+```{r}
+lin_fit <- lm(y ~ x, wmap_sb)
+
+# Summary statistics of the fit
+summary(lin_fit)
+```
+
+We can see that the fitted model has the following equation $y = 1068.28 + 1.71 \cdot x$. 
+
+The positive coefficient of the variable $x$ tells us that if $x$ increase of one unit, the power spectrum will increase of 1.71. Anyway, if we consider a level of significance $\alpha = 0.05$ for our tests, we can say that the variable $x$ doesn't seem to be significant to explain the spectrum power (pvalue of 0.185). In addition, the $R^2$ and the adjusted-$R^2$ are very low, we can interpret these results saying that the linear model doesn't fit the data well.
+
+```{r, echo=FALSE}
+# Plot
+par(mfrow=c(2,2)) # Set 4 slots for the plots
+plot(lin_fit, pch = 16, col = 'light blue', lwd = 3)
+par(mfrow=c(1,1))
+```
+
+Looking at the residuals, we notice that they **not seem to be homoskedastic** (plot 1) because in the second half the variability increase a lot. In addition, they are not really gaussian distributed, in particular in the tails their distribution diverge from the normal one, as we can see in the qqplot.
+
+Let's see the scatterplot with the linear fit.
+
+```{r, echo=FALSE}
+# Plot the data scatter with the linear fit
+plot(wmap_sb$x, wmap_sb$y, xlab = 'Multipole_sb', ylab = 'Power_sb', 
+     main = 'Linear Regression', pch = 21, bg = 'light blue')
+# Draw the fitted line with the estimated coefficients
+# a = intercept, b = slope
+abline(a = lin_fit$coefficients[1], b = lin_fit$coefficients[2],
+       col='red', lwd=3)
+```
+
+As we expected, the model is not able to catch the high variability in this second half of the data. Let's see, in the following steps, if the non-parametric model can do better.
+
+```{r}
+# Compute the MSE of this parametric model
+MSEp_hat <- mean( residuals(lin_fit)^2 ); c(MSEp_hat = MSEp_hat)
+```
+
+### 3.
+
+*Fit and tune a spline regression model to get $\hat{f}$ and its in-sample mean-squared error to be stored in a variable called MSEnp_hat.*
+
+```{r}
+# Set the degrees of the polynomial
+d = c(1,3)
+# Set the possible optimal number of knots
+q = seq(2, 30)
+
+# Search the optimal combination of (d, q)
+comb.gcv.sb = GCV(wmap_sb, d, q)
+d_best = comb.gcv.sb$d_best; q_best = comb.gcv.sb$q_best
+c(d_best = d_best, q_best = q_best)
+```
+
+According to the GCV, the best spline regression model has $(d = 1, q = 2)$. It means that there are 2 equispaced knots and linear fits between them.
+
+Let's see the plot of this spline regression model on the data.
+
+```{r, echo=FALSE}
+# Fit the given model
+f_hat = spline_reg(wmap_sb, d_best, q_best)
+
+# Plot
+plot(wmap_sb$x, wmap_sb$y, xlab = 'Multipole_sb', ylab = 'Power_sb',
+     pch = 21, bg = 'light blue', main = 'Spline Regression')
+curve(spline(x, coeff = f_hat$coeff, d = d_best, q = q_best, 
+             range = c(min(wmap_sb$x), max(wmap_sb$x))),
+      col = 'red', lwd = 3, add = T)
+```
+
+```{r}
+# Compute the MSE of this non-parametric model
+MSEnp_hat <- mean ( (f_hat$res)^2 ); c(MSEnp_hat = MSEnp_hat)
+```
+
+### 4.
+
+Check the difference between the two obtained residuals.
+
+```{r}
+# Difference between the two residuals
+t_hat <- MSEp_hat - MSEnp_hat
+c(t_hat = t_hat)
+```
+
+The MSE of the parametric model is higher than the MSE of the non parametric one. It means that the spline model catches better the pattern in the data. Anyway, both the MSEs are very large numbers, this is because the range of the power spectrum is really wide and, in particular in the second half, there is a lot of distance between the empirical data and the predicted ones with the models.
+
+### 5.
+
+*Simulate a new data set from the fitted parametric model lin_fit assuming homoskedastic Gaussian noise.*
+
+This function simulate a new data set, starting from the fitted parametric model and adding some random gaussian noise to the data. This is a *strong assumption*, because as we have seen in the previous plot, the noise is not homoskedastic in particular in the second half of the data. 
+
+This assumption could improve the performance of the parametric model.
+
+```{r}
+sim_lm <- function(lin_fit, sim_x) {
+  # Inputs: 
+  #         - Linear model (lin_fit)
+  #         - x values at which to simulate (sim_x)
+  # Outputs: 
+  #         - Data frame with columns x and y
+  n       <- length(sim_x)
+  sim_fr  <- data.frame(x = sim_x)
+  sigma   <- summary(lin_fit)$sigma
+  y_sim   <- predict(lin_fit, newdata = sim_fr)
+  y_sim   <- y_sim + rnorm(n, 0, sigma)          # Add noise
+  sim_fr  <- data.frame(sim_fr, y = y_sim)       # Adds y column
+  return(sim_fr)
+}
+```
+
+We can perform our parametric bootstrap strategy ($B = 1000$).
+
+```{r}
+# Set the bootstrap framework
+B <- 1000 # Repeat the steps for 1000 times
+
+MSEp_tilde   <- rep(NA, B)
+MSEnp_tilde  <- rep(NA, B)
+t_tilde      <- rep(NA, B)
+
+# Bootstrap
+for(b in 1:B){
+  # Simulate the data
+  sim_boot <- sim_lm(lin_fit, wmap_sb$x)
+  
+  # Fit the parametric model to the simulated data getting MSEp_tilde[b]
+  lin_boot <- lm(sim_boot$y ~ sim_boot$x)
+  MSEp_tilde[b] <- mean( residuals(lin_boot)^2 )
+  
+  # Fit and tune the nonparametric model to the simulated data getting MSEnp_tilde[b]
+  
+  boot.gcv = GCV(sim_boot, d, q)
+  d_boot = boot.gcv$d_best; q_boot = boot.gcv$q_best
+  
+  f_hat.boot = spline_reg(sim_boot, d_boot, q_boot)
+  MSEnp_tilde[b] <- mean( (f_hat.boot$res)^2 )
+  
+  # Difference between the two bootstrapped mean squared errors
+  t_tilde[b] <- MSEp_tilde[b] - MSEnp_tilde[b]
+}
+```
+
+The p-value will be equal to $pvalue = \frac{1}{B} \sum_{b=1}^{B} \mathbb{I}(\tilde{t_b} > \hat{t})$.
+
+```{r}
+# Compute the pvalue
+pvalue <- (1/B) * sum(t_tilde > t_hat)
+c(pvalue = pvalue)
+```
+
+### 6.
+
+The obtained pvalue is higher than 0.05, so we don't reject the null hypoteses. It means that the parametric model predicts at least as well as the non-parametric one. We think that this result is conditioned by the assumption of homoskedastic gaussian noise.
+
+We can try to plot, as example, the last bootstrap step and compare the two fit.
+
+```{r, echo = FALSE}
+# Plot
+plot(sim_boot$x, sim_boot$y, xlab = 'Multipole_sim boot', ylab = 'Power_sim boot',
+     pch = 21, bg = 'light blue', main = 'Simulated Data')
+curve(spline(x, coeff = f_hat.boot$coeff, d = d_boot, q = q_boot, 
+             range = c(min(sim_boot$x), max(sim_boot$x))),
+      col = 'red', lwd = 3, add = T)
+abline(a = lin_boot$coefficients[1], b = lin_boot$coefficients[2],
+       col= 'green', lwd=3)
+legend('bottomleft', legend = c('Linear Regression', 'Spline Regression'), lwd = 3, 
+       col = c('green', 'red'), cex = 0.7)
+```
+
+We can clearly see that these simulated data are really different from the real ones. Now, we can agree with the result of the bootstrap schema. The two fit are quite similar.
+
+In the following plot we can see the obtained $\tilde{t}$ with respect to the red line that correspond to the $\hat{t}$ value. All the points that are above that line determine the pvalue, in particular they represent the number of times that $\tilde{t}$ is higher than $\hat{t}$. 
+
+```{r, echo = FALSE}
+# Plot
+plot(t_tilde, pch = 21, bg = 'light blue', 
+     main = 'P-Value', ylab = expression(tilde('t')))
+abline(h = t_hat, lwd = 3, col = 'red')
+text(x = -1, y = t_hat + 45000, labels = expression(hat('t')))
+legend('topleft', legend = expression(tilde('t')), pch = 21, pt.bg = 'light blue')
+grid()
+
+```
+
+So, we can say that the results obtained with the bootstrap strategy are not so consistent with respect to the original data because the assumptions made are not reasonable.
+
+If we look at the original data, in our opinion, the non-parametric model has almost surely better performance than the parametric one, as we have seen in the previous plots.
+
+In conclusion, if we look at the curves plotted in the first part of the homework, we can see that we can expect some secondary bumps in the second half of the data. They are both in the spline regression model and in the overfitted polynomial regression model. 

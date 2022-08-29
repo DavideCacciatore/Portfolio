@@ -1,0 +1,470 @@
+---
+title: "Statistical Learning - HW2"
+author: "Group 12 - Cacciatore Davide 2015641, Mattei Luca 1852190, Romani Luca 2005510,"
+output: html_document
+---
+
+```{r, message=FALSE,echo=FALSE, warning=FALSE}
+suppressMessages(require('data.table', quietly = T))
+suppressMessages(require('kernlab', quietly = T))
+suppressMessages(require('caret', quietly = T))
+suppressMessages(require('plotly', quietly = T))
+```
+
+
+# **Part A**
+
+First of all let's load the data using the package *data.table**: 
+
+```{r}
+# Data loading
+test = fread(file = 'test.csv')
+train = fread(file = 'train.csv')
+```
+
+Pick 10 random observation to take apart for the second part:
+
+```{r}
+set.seed(1999) # for reproducibility
+m = 10
+
+# Sample 10 indexes
+indexes = sample(1:nrow(train), m)
+
+# Take apart the 10 observations for the second part
+data.sample = train[indexes]
+target = data.sample$tempo
+train = train[-indexes, ]
+```
+
+Now let's prepare our data: we don't need the **id** neither for the dimensionality reduction or the regression, while we would like to preserve the **genre** feature.
+
+```{r}
+# Extract the variable tempo from the train test
+tempo = train$tempo
+
+# Extract the variables id and genre from the train and test set
+id_train = train$id
+id_test = test$id
+genre_train = train$genre
+genre_test = test$genre
+
+# Remove all these variables from the data in order to prepare it for the dimensionality reduction
+train = train[, -c(7040, 7041, 7042)]
+test = test[, -c(7040, 7041)]
+```
+
+As our target corresponds to the variable **tempo**, we would like to see the correlation with the other features:
+
+```{r, message=FALSE, echo=FALSE, warning=FALSE}
+plot(cor(train, tempo), col = 'blue', bg = 'cyan', pch = 21, xlab = '', ylab = 'COR')
+abline(h = 0, lty = 2, col = 'dark blue')
+```
+```{r, message=FALSE, echo=FALSE, warning=FALSE}
+print(paste0('Correlation with genre: ', cor(genre_train, tempo)))
+```
+As we can see from the plot we get low linear correlations; we also observe that we get two blocks with higher correlation at the beginning, which are the first two frequencies for each of the 171 time chunks, and some higher correlations at the end with the properties of the signal.
+
+Knowing this, we decided to take into consideration for the **KPCA** the first 171 features, the second 171 features with a minus sign and the mean of each of the other 38 blocks of frequencies.
+
+```{r}
+# Take the first group of 171 features
+df = as.data.frame(train[, 1:171])
+df.test = as.data.frame(test[, 1:171])
+
+# Take the second group of 171 features with a minus sign
+df = cbind(df, -train[,172:342])
+df.test = cbind(df.test, -test[,172:342])
+
+# Take only the mean of the others 38 blocks of frequencies
+for (i in 3:40){
+  # For the train set
+  df = cbind(df, rowMeans(train[,(1*(i-1)):(171*i)]))
+}
+colnames(df) = paste("Col", 1:ncol(df), sep = ".")
+
+for (i in 3:40){
+  # For the test set
+  df.test = cbind(df.test, rowMeans(test[,(1*(i-1)):(171*i)]))
+}
+colnames(df.test) = paste("Col", 1:ncol(df.test), sep = ".")
+```
+
+It's now time to get into the dimensionality reduction.
+After trying several methods and configurations, we opted for a **Kernel-PCA** with a *rbfdot* kernel considering only the first 3 principal components.
+After the dimensionality reduction, we attached the signal properties to the resulting data frame. We used the kPCA provided by the package *kernlab*, fixing the parameter sigma equal to $0.2$.
+
+```{r}
+# kPCA
+kpc = kpca(~., data = df, kernel = "rbfdot",
+           kpar = list(sigma = 0.2), features = 3)
+
+# Store the obtained principal components
+train_pca = pcv(kpc)
+
+# Add colnames to the matrix 
+colnames(train_pca) = paste("Comp", 1:ncol(train_pca), sep = ".")
+
+# Add the 'genre' as factor
+train_pca = cbind(train_pca, as.factor(genre_train), train[, 7034:7039])
+
+# Project the test data on the same manifold
+test_pca = predict(kpc, df.test)
+colnames(test_pca) = paste("Comp", 1:ncol(test_pca), sep = ".") 
+test_pca = cbind(test_pca, as.factor(genre_test), test[, 7034:7039])
+```
+
+Now our data are ready for a regression model. Again after several trials, we decided to use an **SVM** with a *radial* kernel. We used the method *'svmRadial'* from the package *caret*.
+We also set a control to a 5-fold cross validation to check our model and tune the parameters, before submitting the predictions on the test.
+
+```{r}
+# Set a 5-fold cross validation
+ctrl = trainControl(method = "cv", number = 5)
+
+# Run the 'svmRadial' model 
+model = train(tempo ~., data = as.data.frame(cbind(train_pca, tempo)), 
+              method = "svmRadial", trControl = ctrl)
+model
+```
+
+At the end, our best result is obtained with $C = 1$ and $sigma = 0.035$. The $RMSE$ in the cross validation is equal to $20.93$ and we get an $R^2$ of $0.47$. The fit of the model to the data is not perfect, but we can still consider it.
+
+Let's now create a csv file with the predictions, to submit on Kaggle:
+
+```{r}
+# Predict the 'tempo' on the test set
+predictions = predict(model, test_pca)
+
+# Create the csv
+result = as.data.frame(cbind(id_test, predictions))
+colnames(result) = c('id', 'target')
+write.csv(result, file = 'result.csv', row.names = FALSE)
+```
+
+# **Part B**
+
+We have implemented a function to split into two equal subsets the 10 observations we have previously extracted from the train set.
+
+```{r}
+# Function used for splitting the data into two equal subsets
+split = function(data, target){
+  # Input:
+  #   - data: data to be splitted
+  #   - target: target variable
+  # Output:
+  #   - List containing the data and the target splitted in train and test
+  index = sample(1:nrow(data), nrow(data)/2)
+  data.train = data[index]
+  data.test = data[-index]
+  target.train = target[index]
+  target.test = target[-index]
+  my_list = list("train" = data.train, "test" = data.test, 
+                 "target_train" = target.train, "target_test" = target.test)
+  return(my_list)
+}
+```
+
+We have performed on the data the same pre-processing steps applied in Job A.
+
+```{r}
+set.seed(123) # for reproducibility
+
+# Split the data
+data = split(data.sample, target)
+
+# Store the results of the split
+train_target = data$target_train
+test_target = data$target_test
+data_train = data$train
+data_test = data$test 
+
+# Store apart the features id and genre
+train.genre = data_train$genre
+test.genre = data_test$genre
+train.id = data_train$id
+test.id = data_test$id
+
+# Remove those features both from the test and train set
+data_train = data_train[,-c(7040, 7041, 7042)]
+data_test = data_test[,-c(7040, 7041, 7042)]
+```
+
+As before, we considered the first block of 171 Mel-frequency cepstral coefficients, the second block with a minus sign and the mean for all the other 38 blocks.
+
+```{r}
+# Train set
+df.B = as.data.frame(data_train[, 1:171])
+df.B = cbind(df.B, -data_train[,172:342])
+for (i in 3:40){
+  df.B = cbind(df.B, rowMeans(data_train[,(1*(i-1)):(171*i)]))
+}
+colnames(df.B) = paste("Col", 1:ncol(df.B), sep = ".")
+
+# Test set
+df.test.B = as.data.frame(data_test[, 1:171])
+df.test.B = cbind(df.test.B, -data_test[,172:342])
+for (i in 3:40){
+  df.test.B = cbind(df.test.B, rowMeans(data_test[,(1*(i-1)):(171*i)]))
+}
+colnames(df.test.B) = paste("Col", 1:ncol(df.test.B), sep = ".")
+```
+
+We computed the **kPCA** keeping the same parameters and numbers of components from the previous analysis. 
+
+At the end, we decided to not consider the variable corresponding to the genre, because it is a factor and there is the possibility to have different labels in our new train and test set.
+
+```{r}
+# kPCA
+kpc.B = kpca(~., data = df.B, kernel = "rbfdot",
+             kpar = list(sigma = 0.2), features = 3)
+
+# Train set
+train_pca.B = pcv(kpc.B)
+colnames(train_pca.B) <- paste("Comp", 1:ncol(train_pca.B), sep = ".")
+train_pca.B = cbind(train_pca.B, data_train[, 7034:7039])
+
+# Test set
+test_pca.B = predict(kpc.B, df.test.B)
+colnames(test_pca.B) <- paste("Comp", 1:ncol(test_pca.B), sep = ".")
+test_pca.B = cbind(test_pca.B, data_test[, 7034:7039])
+```
+
+Again, we used a **SVM** regression model with radial kernel.
+
+```{r, warning = F}
+# SVM Regression
+
+# Set a 2-fold cross validation
+ctrl.B = trainControl(method = "cv", number = 2)
+
+# Run the 'svmRadial' model 
+model.B = train(train_target ~., 
+                data = as.data.frame(cbind(train_pca.B, train_target)), 
+                method = "svmRadial", trControl = ctrl.B)
+model.B
+```
+
+We can notice how we obtain better results in terms of $R^2$ in the cross-validation. Obviously, the reason is that we have only 5 observations here, so the results on the training set become higher. Then, now the best tuned value for $C$ is $1$ and $sigma = 0.07$.
+
+After the training of the model, we fitted it on the test set.
+
+```{r}
+predictions_test = predict(model.B, test_pca.B)
+```
+
+We implemented functions for computing the confidence bands of the predictions. In addition, we decided to fix the significance level $\alpha = 0.80$.
+
+```{r}
+# Set alpha
+alpha = 0.80
+
+# Get k from alpha and n
+k = function(alpha, n = 10){
+  x = ( n/2 + 1 ) * ( 1-alpha )
+  x = ceiling(x)
+  if(x >= n/2) return( n/2 )
+  return(x)
+}
+
+my_k = k(alpha)
+
+# Absolute Error function between the predicted values and the target feature
+AE = function(preds, target){
+  return(abs(preds-target))
+}
+
+# Regression function which uses the implemented model on the test data
+regression_function = function(model, data){
+  return(predict(model, data))
+} 
+
+# Compute and sort the residuals
+residuals = function(model, test, target_test){
+  # Apply the regression model
+  preds = regression_function(model, test)
+  # Compute the residuals
+  my_residuals = AE(preds, target_test)
+  return(sort(my_residuals))
+}
+
+my_residuals = residuals(model.B, test_pca.B, test_target)
+
+# Get d
+d = my_residuals[my_k]
+```
+
+This is the function used for the confidence bands.
+
+```{r}
+# Compute the confidence bands
+confidence_bands = function(model, test, d){
+  bands = c()
+  # Apply the regression model
+  preds = regression_function(model, test)
+  # Compute the bands
+  for(i in 1:length(preds)){
+    band = c(preds[i] - d, preds[i] + d)  
+    bands = rbind(bands, band)
+  }
+  return(bands)
+}
+
+# Get the confidence bands
+bands = confidence_bands(model.B, test_pca.B, d)
+
+# Set row and column names
+rownames(bands) = NULL; colnames(bands) = c('lower', 'upper')
+
+bands
+```
+
+In the plot, we have represented the target tempo with dots and the confidence bands as segments for each song.
+
+```{r, echo=F}
+# first plot
+names = train.id
+values = train_target 
+
+df = data.frame(names, values)
+df$lower = bands[,1]
+df$upper = bands[,2]
+
+fig = plot_ly()
+
+for(i in 1:nrow(df)){
+  fig = fig %>% add_markers(x = df$values[i],  
+                            y = length(df$values)+1-i,  
+                            mode = 'markers',
+                            size = 100,
+                            marker = list(color = 'ligthblue'),
+                            hoverinfo = "text",
+                            showlegend = F,
+                            text = paste("value: ", df$values)[i]
+  )
+  
+  fig = fig %>% add_segments(x = df$lower[i], xend = df$upper[i],
+                             y = length(df$values)+1-i,
+                             yend = length(df$values)+1-i,
+                             showlegend = F,
+                             hoverinfo = 'skip')
+  
+}
+
+
+fig = layout(fig,
+             xaxis = list(showgrid = T, tickfont = list(color = "black"),
+                          title = 'tempo'),
+             yaxis = list(showgrid = T, tickfont = list(color = "black"),
+                          tickmode = "array", tickvals = nrow(df):1,
+                          ticktext = paste0('ID:  ', df$names),
+                          domain = c(0, 0.9)),
+             title = 'Confidence Bands of the estimated tempo')
+fig
+```
+
+In the above plot, we can see how only one target tempo is outside our predicted confidence bands. This is a good performance, but we have to keep in mind that it strictly depends on the choices made in the splitting part. The model is trained only on 5 observations, so it is not really reliable.
+
+Now, we extended our analysis taking randomly 100 observations from the test set. Obviously, we run the same pre-processing steps and we applied the same dimensionality reduction and model to the data.
+
+```{r}
+# Take 100 random test obs
+set.seed(123)
+m = 100
+
+# Sample the indexes
+indexes = sample(1:nrow(test), m)
+test_sample = test[indexes]
+
+# Pre-processing of the dataset
+test_sample_id = id_test[indexes]
+test_sample_genre = genre_test[indexes] 
+
+df.test.sample = as.data.frame(test_sample[, 1:171])
+df.test.sample = cbind(df.test.sample, -test_sample[,172:342])
+
+for (i in 3:40){
+  df.test.sample = cbind(df.test.sample, rowMeans(test_sample[,(1*(i-1)):(171*i)]))
+}
+colnames(df.test.sample) = paste("Col", 1:ncol(df.test.sample), sep = ".")
+
+# Apply the same kPCA as before on the 100-sampled test observations
+test_sample_pca = predict(kpc.B, df.test.sample)
+colnames(test_sample_pca) = paste("Comp", 1:ncol(test_sample_pca), sep = ".")
+test_sample_pca = cbind(test_sample_pca, test_sample[, 7034:7039])
+
+# Get the bands using the same SVM regression model
+bands = confidence_bands(model.B, test_sample_pca, d)
+```
+
+Below, we can see the predicted confidence bands for each of the observations. 
+
+```{r, echo=F}
+rownames(bands) = NULL
+
+# Second plot
+names = test_sample_id
+
+df = data.frame(names)
+df$lower = bands[,1]
+df$upper = bands[,2]
+
+fig1 = plot_ly()
+
+for(i in 1:nrow(df)){
+  
+  fig1 = fig1 %>% add_segments(x = df$lower[i], xend = df$upper[i],
+                               y = length(df$values)+1-i,
+                               yend = length(df$values)+1-i,
+                               showlegend = F,
+                               hoverinfo = 'text',
+                               text = paste("ID: ", df$names,
+                                            '   Lower:  ', round(df$lower, 2),
+                                            '   Upper:  ', round(df$upper, 2))[i])
+  
+}
+
+fig1 = layout(fig1,
+              
+              xaxis = list(showgrid = T, tickfont = list(color = "black"),
+                           title = 'tempo'),
+              yaxis = list(
+                title = "",
+                zeroline = FALSE,
+                showline = FALSE,
+                showticklabels = FALSE,
+                showgrid = FALSE),
+              title = 'Confidence Bands of the estimated tempo of 100 songs'
+              )
+fig1
+```
+
+We can see that there is some variability among the bands. Moving the cursor on the bands we can see the respective bands' extremes and the ID of the song. 
+
+Now, let's see some insights about them.
+
+```{r, echo = F}
+width = bands[1,2] - bands[1,1]
+lower = mean(bands[,1])
+upper = mean(bands[,2])
+insights = rbind(width = round(width, 2), 
+                 mean.lower.bound = round(lower, 2),
+                 mean.upper.bound = round(upper, 2))
+colnames(insights) = 'values'
+insights
+```
+
+We obtained bands with a width of $34.91$, the mean lower bound is $144.89$ and the mean upper bound is $179.80$. 
+
+Let's see a boxplot of the central values of these intervals, compared with the distribution of the target feature tempo in the entire training set.
+
+```{r, echo = F}
+par(mfrow=c(1, 2))
+boxplot(rowMeans(bands), main = "Bands' central values", ylab = 'tempo',
+        col = 'cyan', ylim = c(60, 200))
+boxplot(tempo, main = 'Tempo in the training set', ylab = 'tempo',
+        col = 'magenta')
+```
+
+We can see how the central values of the intervals for the 100 test observations has a shorter range than the entire tempo distribution. The reason is that the model used has been trained only on 5 observations, so its prediction power really depends on the values of that observations.
+
+In conclusion, we can affirm that returning a prediction in the form of a band can be more useful and informative than returning a single-point prediction given the uncertainty level of the model.

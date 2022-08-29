@@ -1,0 +1,26 @@
+model{
+    for (g in 1:Ngames) {
+      Y1[g] ~ dnegbin(p[g,1],r)
+      Y2[g] ~ dnegbin(p[g,2],r)
+      
+      p[g,1] <- r/(r+lambda[g,1])
+      p[g,2] <- r/(r+lambda[g,2])
+      
+      log(lambda[g,1]) <- att[hometeam[g]] + def[awayteam[g]]
+      log(lambda[g,2]) <- att[awayteam[g]] + def[hometeam[g]]
+    }
+  
+  r ~ dunif(0, 50)
+  
+  for (t in 1:Nteams) {
+    att.star[t] ~ dnorm(mu.att, tau.att)
+    def.star[t] ~ dnorm(mu.def, tau.def)
+    att[t] <- att.star[t] - mean(att.star[])
+    def[t] <- def.star[t] - mean(def.star[])
+  }
+
+  mu.att ~ dnorm(0, 0.0001)
+  mu.def ~ dnorm(0, 0.0001)
+  tau.att ~ dgamma(0.01, 0.01)
+  tau.def ~ dgamma(0.01, 0.01)
+}
