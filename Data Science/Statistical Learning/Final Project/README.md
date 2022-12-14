@@ -1,5 +1,7 @@
 ## **Conformal Predictions for Weather Image Classification**
 
+![image](https://static.pbslearningmedia.org/media/assets/buac17-vid-diffweather-poster_aN5dMPV.png)
+
 In recent decades, Weather Recognition has become increasingly important, thanks to the growing
 interest in Computer Vision and AI applications. Being able to analyze and classify visual conditions
 at a given time and space has become necessary for many emerging sectors - just think of
