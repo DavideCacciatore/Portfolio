@@ -1,5 +1,7 @@
 ## **SMS Spam Classification**
 
+![image]([http://url/to/img.png](https://www.money.it/local/cache-gd2/61/9456533d04143c45961326653cc6fd.jpg?1670929805))
+
 The purpose of this project is to build a model able to detect if a SMS is a spam message
 or not. Many of our phones and sms apps have a spam detector that helps us to avoid
 frauds, virus and malicious contents. We think this is an important topic and we wanted to
