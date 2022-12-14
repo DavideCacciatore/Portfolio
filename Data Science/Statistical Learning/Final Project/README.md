@@ -34,3 +34,5 @@ the images in our train set.
 
 Finally, we tested our models with their conformal predictions on a group of images taken directly
 from us over the past few years to see their capability in real situations.
+
+This project has been made with Luca Mattei and Luca Romani.
