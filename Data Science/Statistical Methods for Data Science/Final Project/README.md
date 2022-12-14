@@ -1,5 +1,7 @@
 ## Bayesian hierarchical models for the prediction of football results
 
+![image](https://www.bausciacafe.com/wp-content/uploads/2020/03/lega-serie-a-banner.jpg)
+
 Statistical modelling of sports data is a popular topic and much research has been produced for this purpose,
 also with reference to football.
 
