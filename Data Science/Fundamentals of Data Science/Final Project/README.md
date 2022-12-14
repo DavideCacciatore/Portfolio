@@ -5,7 +5,7 @@ or not. Many of our phones and sms apps have a spam detector that helps us to av
 frauds, virus and malicious contents. We think this is an important topic and we wanted to
 understand better how it works.
 
-In our project we analyzed the SMS Spam Collection Dataset[1] from Kaggle. This dataset
+In our project we analyzed the [SMS Spam Collection Dataset](https://www.kaggle.com/uciml/sms-spam-collection-dataset) from Kaggle. This dataset
 contains 5572 sms divided in two classes: ham and spam.
 
 We pre-processed the messages, we divided the dataset in train and test set and then we
