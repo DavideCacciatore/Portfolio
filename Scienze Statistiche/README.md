@@ -1,5 +1,5 @@
 ## **Scienze Statistiche**
 
-![image](https://www.unina.it/documents/11897/0/Laurea+Magistrale+in+Scienze+Statistiche+per+le+Decisioni/b8b8350a-8b86-4cfb-9066-cbda1799b337?t=1488448972456)
+![image](https://www.unimib.it/sites/default/files/styles/copertina_corsi_1320x439/public/Copertine%20corsi/Scienze%20statistiche%20ed%20economiche%20L.jpg?itok=SJaxaf4B)
 
 All the projects of my Bachelor's Degree are in Italian, including my thesis.
